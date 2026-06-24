@@ -303,13 +303,14 @@ If two numbers are selected:
 
 - One must be interpretable as the white-sum selection.
 - One must be interpretable as the mixed-sum selection.
-- The white-sum selection must come first.
-- If both selected numbers are in the same row, the visual row order must allow the white-sum mark to be before the mixed-sum mark.
+- If the two selected numbers are in different rows, they may be selected in either order.
+- If both selected numbers are in the same row, the white-sum mark must be visually before the mixed-sum mark in that row.
 
 Examples:
 
 - If the white sum is 6 and the red mixed sum is 7, the user can select red 6 and red 7.
 - If the white sum is 7 and the red mixed sum is 6, the user cannot select red 6 and red 7, because the white mark would have to come after the mixed mark in that row.
+- If the white sum is 7 and a red mixed sum is 6, the user may select red 6 first and then select white-sum 7 in a different row.
 
 ### Ambiguous Selection Logic
 
@@ -379,17 +380,25 @@ If the current player is the last player, wrap to the first player. There are no
 
 ## Undo Button
 
-Undo reverses exactly the most recent uncommitted user action.
+Undo reverses exactly the most recent user action, including both uncommitted turn actions and committed Next actions.
 
 Every user click that changes turn state creates one undoable action. Anything selected by a single user click is exactly one action.
 
-Undoable actions include:
+Within the current uncommitted turn, undoable actions include:
 
 - Dice roll on the user's turn.
 - Opponent white-sum selection.
 - Score-card number selection.
 - Penalty selection.
 - Opponent row lock selection.
+- Next, which commits the current turn.
+
+Undo priority:
+
+- If the current turn has uncommitted undo history, Undo reverses the most recent uncommitted action first.
+- If the current turn has no uncommitted undo history and at least one committed turn exists, Undo reverses the most recent Next action.
+- Undo can repeatedly reverse committed Next actions all the way back to the start of the game.
+- Undo is disabled only when there is no uncommitted action and no committed Next action to reverse, or when the active game has been exited.
 
 Special undo cases:
 
@@ -399,10 +408,13 @@ Special undo cases:
 - Undoing a score-card number removes only that selected number and any automatic lock that came from that same click.
 - Undoing an opponent white-sum selection returns to the "choose white sum" state. Any later score-card or lock actions would already have been undone first.
 - Undoing a user's dice roll requires a confirmation modal because a random roll cannot be reliably repeated.
+- Undoing Next restores the game to the exact state immediately before Next was pressed, including current player, rows, locks, penalties, staged turn state, dice/sum state, game-over state, and game-over reason.
+- Undoing Next restores the previous turn as still ready to press Next, so the user can edit the restored turn from there.
+- Undoing Next does not require the random-roll confirmation, because it restores a saved snapshot rather than rerolling dice.
 
-Undo does not change committed history after Next has been pressed.
+Undo history for committed Next actions should be stored as game-level snapshots, not as hand-written inverse operations.
 
-Pressing Next, Exit, or Start over is not undoable through the turn Undo button.
+Pressing Exit or Start over is not undoable through the turn Undo button.
 
 Exit and Start over have their own confirmation pop-ups because those actions cannot be undone.
 
@@ -480,6 +492,7 @@ Persist locally:
 - Penalties.
 - Current uncommitted turn state.
 - Current uncommitted turn undo history.
+- Game-level undo stack for committed Next snapshots.
 - Game-over state.
 
 Suggested storage keys:
@@ -588,7 +601,9 @@ Before considering an implementation complete:
 - Verify dice rolling and manual white-sum selection.
 - Verify legal move enabling, disabled illegal moves, and hint-toggle visuals.
 - Verify ambiguous selections remain valid until forced.
-- Verify one-action-at-a-time undo and roll-undo confirmation.
+- Verify one-action-at-a-time uncommitted undo and roll-undo confirmation.
+- Verify committed-turn undo can reverse Next actions repeatedly back to the start of the game.
+- Verify undoing Next restores the previous turn as editable and ready to press Next.
 - Verify Exit and Start over confirmation pop-ups.
 - Verify row closing, staged locks, die removal after Next, and multiple row closures.
 - Verify scoring, penalties, and game-over conditions.
