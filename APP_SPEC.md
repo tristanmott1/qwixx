@@ -183,7 +183,7 @@ Visual order matters. "To the right" means to the right on screen:
 Each row includes:
 
 - Colored row band.
-- White number tiles.
+- Lightly row-tinted number tiles.
 - A lock circle after the final number.
 
 Number labels should be centered in their tiles, including double-digit labels.
@@ -561,7 +561,9 @@ Dice:
 Score card:
 
 - App-native and elegant, not a literal copy of the photo.
-- Colored row bands with white number tiles.
+- Colored row bands with lightly row-tinted number tiles.
+- Normal number tiles should be clearly lighter than the row band but tinted enough that pure white legal hints stand out.
+- Color total boxes should use the same row-tinted fills as the score row number tiles.
 - Bold black X for selected marks.
 - Lock circles should be visually clear but compact.
 - The score card should remain readable on mobile without feeling cramped.

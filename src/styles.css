@@ -503,22 +503,32 @@ button:focus-visible {
   align-items: center;
   padding: 5px;
   border-radius: 8px;
+  --row-tile-fill: rgba(255, 255, 255, 0.92);
+  --row-tile-border: rgba(255, 255, 255, 0.65);
 }
 
 .score-row.red {
   background: var(--red);
+  --row-tile-fill: #fca5a5;
+  --row-tile-border: #fecaca;
 }
 
 .score-row.yellow {
   background: var(--yellow);
+  --row-tile-fill: #fde047;
+  --row-tile-border: #fef08a;
 }
 
 .score-row.green {
   background: var(--green);
+  --row-tile-fill: #86efac;
+  --row-tile-border: #bbf7d0;
 }
 
 .score-row.blue {
   background: var(--blue);
+  --row-tile-fill: #93c5fd;
+  --row-tile-border: #bfdbfe;
 }
 
 .score-row.closed {
@@ -532,9 +542,9 @@ button:focus-visible {
   place-items: center;
   min-width: 0;
   min-height: 34px;
-  border: 1px solid rgba(255, 255, 255, 0.65);
+  border: 1px solid var(--row-tile-border);
   border-radius: 7px;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--row-tile-fill);
   color: var(--ink);
   padding: 0;
   text-align: center;
@@ -745,22 +755,22 @@ button:focus-visible {
 }
 
 .total-box.red {
-  background: #fee2e2;
+  background: #fca5a5;
   border-color: #fecaca;
 }
 
 .total-box.yellow {
-  background: #fef3c7;
-  border-color: #fde68a;
+  background: #fde047;
+  border-color: #fef08a;
 }
 
 .total-box.green {
-  background: #dcfce7;
+  background: #86efac;
   border-color: #bbf7d0;
 }
 
 .total-box.blue {
-  background: #dbeafe;
+  background: #93c5fd;
   border-color: #bfdbfe;
 }
 
