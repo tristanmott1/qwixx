@@ -545,7 +545,9 @@ In sync mode:
 
 - Exit removes the local player from the synced game.
 - Start over is visible and enabled only for the host.
-- Host Start over restarts a fresh synced game immediately after host confirmation, using the same connected players and order without QR resync.
+- Host Start over returns all connected players to the sync lobby after host confirmation, using the same connected players and order without QR resync.
+- Existing WebRTC connections stay open after host Start over.
+- In the returned lobby, the host can rearrange order, randomize order, remove players, scan new players, and edit the selected score card before pressing Start again.
 - Non-host players do not see or use Start over.
 - If the host exits or disconnects, the synced session ends for everyone.
 - Host exit or disconnect returns players to the Sync tab with a session-ended message.
@@ -1273,7 +1275,7 @@ Local Exit clears the active game state but keeps roster and selected user playe
 
 Local Start over replaces the active game state with a fresh game using the current game players and selected user player.
 
-Sync Exit clears the local sync session state. Host Start over replaces the synced game state with a fresh game using the current connected players and order.
+Sync Exit clears the local sync session state. Host Start over clears the synced board state and returns everyone to the connected sync lobby with the current connected players and order.
 
 ## Preset Score Card Implementation Plan
 
@@ -1468,7 +1470,7 @@ Sync host behavior:
 - Host can open picker before game start.
 - Confirming picker changes broadcasts updated lobby state.
 - Host game start includes selected score-card id.
-- Host Start over includes selected score-card id.
+- Host Start over returns everyone to the lobby and includes selected score-card id.
 
 Sync joiner behavior:
 
@@ -1797,7 +1799,7 @@ Before considering an implementation complete:
 - Verify no sync Advance button or between-turn phase appears.
 - Verify automatic sync advance applies all Ready payloads, row closures, penalty game-over state, and next-player selection together.
 - Verify local Exit and Start over confirmation pop-ups.
-- Verify sync host-only Start over confirmation and fresh-game restart without QR resync.
+- Verify sync host-only Start over confirmation returns everyone to the lobby without QR resync.
 - Verify sync non-host Exit removes that player and future turns skip them.
 - Verify sync current-player exit or host removal discards the current turn and skips to the next active player.
 - Verify sync host Exit is allowed even when other players remain and sends `sessionEnded`.

@@ -1947,6 +1947,10 @@ function App() {
       setSyncHostPlayerId(hostId);
       setSyncPhase("lobby");
       setSyncScoreCardId(nextScoreCardId);
+      setMode("sync");
+      setPage("home");
+      setHomeTab("sync");
+      setSyncAnswerText("");
       return;
     }
 
@@ -2027,14 +2031,18 @@ function App() {
 
     if (message.type === "hostStartOver") {
       const nextPlayers = normalizePlayers(message.players);
-      const turnId = typeof message.turnId === "string" ? message.turnId : nextTurnId();
       const nextHintsLockedOff = message.hintsLockedOff === true;
       const nextScoreCardId = normalizeScoreCardId(
         message.scoreCardId,
         latestRef.current.syncScoreCardId ?? DEFAULT_SCORE_CARD_ID,
       );
 
-      startSyncedPlay(nextPlayers.length > 0 ? nextPlayers : latestRef.current.gamePlayers, turnId, nextHintsLockedOff, nextScoreCardId);
+      returnSyncToLobby(
+        nextPlayers.length > 0 ? nextPlayers : latestRef.current.gamePlayers,
+        "lobby",
+        nextHintsLockedOff,
+        nextScoreCardId,
+      );
       return;
     }
 
@@ -2082,6 +2090,44 @@ function App() {
     });
     setMode("sync");
     setPage("play");
+  }
+
+  function returnSyncToLobby(
+    nextPlayers: Player[],
+    nextPhase: "hostLobby" | "lobby",
+    nextHintsLockedOff = syncHintsLockedOff,
+    nextScoreCardId = latestRef.current.syncScoreCardId ?? scoreCardId,
+  ) {
+    const nextRows = createEmptyRows();
+    const nextTurn = createEmptyTurn();
+
+    clearSyncAdvanceFeedback();
+    applyPlayState({
+      rows: nextRows,
+      penalties: 0,
+      turn: nextTurn,
+      gamePlayers: nextPlayers,
+      currentPlayerIndex: 0,
+      gameOver: false,
+      gameOverReason: null,
+      undoStack: [],
+      syncTurnId: nextTurnId(),
+      syncPhase: nextPhase,
+      syncReadyPayloads: [],
+      syncHintsLockedOff: nextHintsLockedOff,
+      syncScoreCardId: nextScoreCardId,
+      gameScoreCardId: nextScoreCardId,
+      rollAnimationKey: 0,
+    });
+    setMode("sync");
+    setPage("home");
+    setHomeTab("sync");
+    setSyncCameraMode(null);
+    setSyncMessage("");
+
+    if (nextPhase === "lobby") {
+      setSyncAnswerText("");
+    }
   }
 
   function startSyncGame() {
@@ -2513,16 +2559,14 @@ function App() {
     setConfirmAction(null);
 
     if (mode === "sync" && isHost) {
-      const nextTurn = nextTurnId();
       const nextScoreCardId = syncScoreCardId ?? scoreCardId;
 
-      startSyncedPlay(gamePlayers, nextTurn, syncHintsLockedOff, nextScoreCardId);
+      returnSyncToLobby(gamePlayers, "hostLobby", syncHintsLockedOff, nextScoreCardId);
       hostTransportRef.current?.broadcast({
         type: "hostStartOver",
         hintsLockedOff: syncHintsLockedOff,
         players: gamePlayers,
         scoreCardId: nextScoreCardId,
-        turnId: nextTurn,
       });
       return;
     }

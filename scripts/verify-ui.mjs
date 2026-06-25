@@ -110,6 +110,7 @@ async function runSourceChecks() {
   assert(appSource.includes("page === \"picker\""), "Score-card picker is a real app page.");
   assert(appSource.includes("openScoreCardPicker"), "Home score-card previews can open the picker.");
   assert(appSource.includes("score-row-backdrop"), "Score-card rows render a grid-aligned segmented backdrop.");
+  assert(appSource.includes("returnSyncToLobby"), "Sync Start over returns connected players to the lobby.");
   assert(appSource.includes("scoreCardId:"), "Local and sync game setup carries a selected score-card id.");
   assert(appSource.includes("syncScoreCardId"), "Sync mode tracks the host-selected runtime score card.");
   assert(appSource.includes("broadcastLobbyState") && appSource.includes("scoreCardId"), "Sync lobby broadcasts score-card changes.");
@@ -448,6 +449,18 @@ async function runSyncHostChecks(page) {
   assert(await page.getByRole("button", { name: "Undo" }).isDisabled(), "Sync Ready keeps Undo disabled after automatic advance.");
   assert((await page.getByRole("button", { name: /Transfer host/ }).count()) === 0, "Permanent-host replacement controls are not shown.");
   await page.screenshot({ path: outputPath("sync-play-after-advance-mobile.png"), fullPage: true });
+  await page.getByRole("button", { name: "Start over" }).click();
+  await page.getByRole("dialog", { name: "Start over?" }).getByRole("button", { name: "Reset" }).click();
+  assert((await page.locator(".sync-control-row").count()) === 1, "Sync host Start over returns to the editable lobby.");
+  assert(
+    JSON.stringify(await page.locator(".sync-control-row button").allTextContents()) === JSON.stringify(["Randomize", "Scan"]),
+    "Returned sync lobby keeps order and scan controls.",
+  );
+  assert((await page.locator(".qr-panel .qr-code").count()) === 1, "Returned sync lobby keeps a host QR for adding players.");
+  assert((await page.locator(".sum-strip").count()) === 0, "Returned sync lobby leaves the play page.");
+  await page.screenshot({ path: outputPath("sync-returned-lobby-mobile.png"), fullPage: true });
+  await page.getByRole("button", { name: "Start" }).click();
+  assert((await page.locator(".dice-grid").count()) === 1, "Sync host can start again from the returned lobby.");
   await page.getByRole("button", { name: "Exit" }).click();
   assert((await page.getByRole("dialog", { name: "Exit?" }).count()) === 1, "Sync host Exit asks for confirmation.");
   await page.getByRole("button", { name: "Cancel" }).click();
