@@ -3264,6 +3264,7 @@ function App() {
 
           <section className="score-card" aria-label="Score card">
             <div className="score-rows">
+              <span className="score-final-divider" aria-hidden="true" />
               {ROW_COLORS.map((row) => (
                 <ScoreRow
                   key={row}
@@ -3988,6 +3989,7 @@ function ScoreCardPreview({
   return (
     <div className="score-card-preview" aria-label={label}>
       <div className="score-rows">
+        <span className="score-final-divider" aria-hidden="true" />
         {ROW_COLORS.map((row) => (
           <ScoreRow
             key={row}

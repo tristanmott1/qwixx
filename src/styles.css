@@ -723,8 +723,37 @@ button:focus-visible {
 }
 
 .score-rows {
+  position: relative;
   display: grid;
   gap: 6px;
+  --score-lock-size: 34px;
+  --score-row-gap: 4px;
+  --score-row-padding: 5px;
+  --score-divider-offset: -2px;
+}
+
+.score-final-divider {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: repeat(11, minmax(0, 1fr)) var(--score-lock-size);
+  grid-template-rows: 1fr;
+  gap: var(--score-row-gap);
+  padding-inline: var(--score-row-padding);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.score-final-divider::before {
+  content: "";
+  grid-column: 11;
+  grid-row: 1;
+  justify-self: start;
+  width: 1px;
+  height: 100%;
+  background: var(--ink);
+  transform: translateX(var(--score-divider-offset));
 }
 
 .score-row {
@@ -736,9 +765,6 @@ button:focus-visible {
   padding: var(--score-row-padding);
   border-radius: 8px;
   overflow: hidden;
-  --score-lock-size: 34px;
-  --score-row-gap: 4px;
-  --score-row-padding: 5px;
   --row-tile-fill: rgba(255, 255, 255, 0.92);
   --row-tile-border: var(--row-tile-fill);
 }
@@ -821,12 +847,10 @@ button:focus-visible {
 
 .score-card-preview .score-rows {
   gap: 4px;
-}
-
-.score-card-preview .score-row {
   --score-lock-size: 30px;
   --score-row-gap: 3px;
   --score-row-padding: 4px;
+  --score-divider-offset: -1.5px;
 }
 
 .score-card-preview .score-tile,
@@ -1256,10 +1280,11 @@ button:focus-visible {
     gap: 10px;
   }
 
-  .score-row {
+  .score-rows {
     --score-lock-size: 28px;
     --score-row-gap: 3px;
     --score-row-padding: 4px;
+    --score-divider-offset: -1.5px;
   }
 
   .score-tile,
@@ -1311,9 +1336,10 @@ button:focus-visible {
 }
 
 @media (max-width: 380px) {
-  .score-row {
+  .score-rows {
     --score-lock-size: 26px;
     --score-row-gap: 2px;
+    --score-divider-offset: -1px;
   }
 
   .score-tile,
