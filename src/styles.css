@@ -287,6 +287,73 @@ button:focus-visible {
   font-size: 1.12rem;
 }
 
+.score-card-choice {
+  display: grid;
+  gap: 10px;
+}
+
+.score-card-choice-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--ink);
+  font-weight: 950;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.filter-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 0 10px;
+  font-size: 0.9rem;
+  font-weight: 850;
+}
+
+.filter-option input {
+  width: 18px;
+  min-width: 18px;
+  min-height: 18px;
+  accent-color: var(--ink);
+}
+
+.card-option-list {
+  display: grid;
+  gap: 10px;
+}
+
+.score-card-option {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 10px;
+  color: var(--ink);
+  text-align: left;
+}
+
+.score-card-option.selected {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.08);
+}
+
+.score-card-option-title {
+  font-size: 0.9rem;
+  font-weight: 950;
+}
+
 .sync-start-row,
 .sync-control-row {
   display: grid;
@@ -697,6 +764,27 @@ button:focus-visible {
 
 .score-row.closed {
   filter: saturate(0.72);
+}
+
+.score-card-preview .score-rows {
+  gap: 4px;
+}
+
+.score-card-preview .score-row {
+  grid-template-columns: repeat(11, minmax(0, 1fr)) 30px;
+  gap: 3px;
+  padding: 4px;
+}
+
+.score-card-preview .score-tile,
+.score-card-preview .lock-tile {
+  min-height: 28px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+}
+
+.score-card-preview .lock-tile {
+  border-radius: 999px;
 }
 
 .score-tile,

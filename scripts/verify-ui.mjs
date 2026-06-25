@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { mkdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import lzString from "lz-string";
+import { validateScoreCards } from "./score-cards/score-card-validation.mjs";
 
 const baseUrl = "http://127.0.0.1:5174/";
 const outputDir = new URL("../verification-output/", import.meta.url);
@@ -85,6 +86,8 @@ async function runSourceChecks() {
   const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
   const styleSource = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
   const transportSource = await readFile(new URL("../src/syncTransport.ts", import.meta.url), "utf8");
+  const scoreCards = JSON.parse(await readFile(new URL("../src/data/scoreCards.json", import.meta.url), "utf8"));
+  const scoreCardErrors = validateScoreCards(scoreCards);
   const removedRefs = [
     "rowsRef",
     "turnRef",
@@ -102,9 +105,16 @@ async function runSourceChecks() {
     assert(!appSource.includes(refName), `${refName} should be folded into latestRef.`);
   }
 
+  assert(scoreCardErrors.length === 0, `Score-card presets are invalid:\n${scoreCardErrors.join("\n")}`);
+  assert(scoreCards.length === 100, "Exactly 100 score-card presets are available.");
+  assert(appSource.includes("page === \"picker\""), "Score-card picker is a real app page.");
+  assert(appSource.includes("openScoreCardPicker"), "Home score-card previews can open the picker.");
+  assert(appSource.includes("scoreCardId:"), "Local and sync game setup carries a selected score-card id.");
+  assert(appSource.includes("syncScoreCardId"), "Sync mode tracks the host-selected runtime score card.");
+  assert(appSource.includes("broadcastLobbyState") && appSource.includes("scoreCardId"), "Sync lobby broadcasts score-card changes.");
   assert(/type LatestSyncState = \{[\s\S]*penalties: number;/.test(appSource), "LatestSyncState includes penalties.");
   assert(
-    appSource.includes("commitLocalTurnState(latest.rows, latest.penalties, latest.turn)"),
+    appSource.includes("commitLocalTurnState(latestScoreCard, latest.rows, latest.penalties, latest.turn)"),
     "Automatic sync advance commits from latest rows, penalties, and turn.",
   );
   assert(!appSource.includes("readyToAdvance"), "Sync has no between-turn readyToAdvance phase.");
@@ -187,6 +197,7 @@ function activeGameForRoll(roll, overrides = {}) {
     gameOver: overrides.gameOver ?? false,
     gameOverReason: overrides.gameOverReason ?? null,
     undoStack: overrides.undoStack ?? [],
+    scoreCardId: overrides.scoreCardId ?? 1,
   };
 }
 
@@ -206,6 +217,35 @@ async function runFlowChecks(page) {
   await page.evaluate(() => localStorage.clear());
   await page.reload();
   await page.screenshot({ path: outputPath("home-empty-mobile.png"), fullPage: true });
+
+  assert((await page.locator(".score-card-choice-heading", { hasText: "Card #1" }).count()) === 1, "Local home shows the default score card.");
+  await page.getByRole("button", { name: "Edit" }).click();
+  assert((await page.getByRole("heading", { name: "Card #1" }).count()) === 1, "Picker opens on the selected score card.");
+  assert(await page.getByRole("checkbox", { name: "Standard", exact: true }).isDisabled(), "Picker does not allow all filters to be unchecked.");
+  await page.getByRole("checkbox", { name: "Numbers", exact: true }).check();
+  await page.getByRole("button", { name: "Select card 34", exact: true }).scrollIntoViewIfNeeded();
+  await page.getByRole("button", { name: "Select card 34", exact: true }).click();
+  await page.waitForFunction(() => {
+    const heading = document.querySelector(".card-picker-page h1");
+    const top = heading?.getBoundingClientRect().top ?? 999;
+
+    return top >= 0 && top < 120;
+  });
+  assert((await page.getByRole("heading", { name: "Card #34" }).count()) === 1, "Picker can select a mixed-number score card.");
+  await page.screenshot({ path: outputPath("score-card-picker-mobile.png"), fullPage: true });
+  await page.getByRole("button", { name: "Back" }).click();
+  assert((await page.locator(".score-card-choice-heading", { hasText: "Card #1" }).count()) === 1, "Back keeps the original score-card selection.");
+
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByRole("checkbox", { name: "Numbers", exact: true }).check();
+  await page.getByRole("button", { name: "Select card 2", exact: true }).click();
+  await page.getByRole("button", { name: "Confirm" }).click();
+  assert((await page.locator(".score-card-choice-heading", { hasText: "Card #2" }).count()) === 1, "Confirm saves the selected score card.");
+
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByRole("button", { name: "Select card 1", exact: true }).click();
+  await page.getByRole("button", { name: "Confirm" }).click();
+  assert((await page.locator(".score-card-choice-heading", { hasText: "Card #1" }).count()) === 1, "Picker can return the local game to the standard score card.");
 
   for (const name of ["Alice", "Bob", "Cora"]) {
     await page.getByPlaceholder("Name").fill(name);
@@ -347,12 +387,14 @@ async function runSyncHostChecks(page) {
   await page.reload();
 
   await page.getByRole("button", { name: "Sync" }).click();
+  assert((await page.locator(".score-card-choice").count()) === 0, "Sync setup hides score-card previews before hosting or joining.");
   await page.getByLabel("Your name").fill("Alice");
   await page.getByRole("button", { name: "Host" }).click();
   await page.waitForSelector(".qr-panel .qr-code", { timeout: 5000 });
   await page.screenshot({ path: outputPath("sync-host-lobby-mobile.png"), fullPage: true });
 
   assert((await page.getByText("Alice").count()) > 0, "Host appears in sync lobby.");
+  assert((await page.locator(".score-card-choice-heading", { hasText: "Card #1" }).count()) === 1, "Sync host lobby shows the host score card.");
   assert((await page.locator(".qr-panel .qr-code").count()) === 1, "Host QR is generated.");
   assert(
     JSON.stringify(await page.locator(".sync-control-row button").allTextContents()) === JSON.stringify(["Randomize", "Scan"]),

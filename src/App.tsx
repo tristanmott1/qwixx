@@ -8,6 +8,7 @@ import {
   EyeOff,
   GripVertical,
   Lock,
+  Pencil,
   Plus,
   RotateCcw,
   ScanLine,
@@ -21,6 +22,7 @@ import {
 } from "lucide-react";
 import QRCode from "qrcode";
 import {
+  type CSSProperties,
   type FormEvent,
   type PointerEvent as ReactPointerEvent,
   useEffect,
@@ -30,9 +32,36 @@ import {
   useState,
 } from "react";
 import jsQR from "jsqr";
+import {
+  DEFAULT_SCORE_CARD_ID,
+  DEFAULT_SCORE_CARD_FILTERS,
+  ROW_COLORS,
+  SCORE_CARD_TYPES,
+  cloneScoreCardFilters,
+  ensureFilteredScoreCardId,
+  filtersIncludeScoreCard,
+  firstFilteredScoreCardId,
+  getFilteredScoreCards,
+  getScoreCard,
+  getScoreCardFinalTile,
+  getScoreCardLockColor,
+  getScoreCardNumbers,
+  getScoreCardRow,
+  getScoreCardRowLabel,
+  getScoreCardTile,
+  getScoreCardTypeLabel,
+  hasAnyScoreCardFilter,
+  isScoreCardColor,
+  normalizeScoreCardFilters,
+  normalizeScoreCardId,
+  type ScoreCardColor,
+  type ScoreCardFilters,
+  type ScoreCardPreset,
+  type ScoreCardType,
+} from "./scoreCards";
 import { SyncHostTransport, SyncJoinTransport, type SyncWireMessage } from "./syncTransport";
 
-type Page = "home" | "play";
+type Page = "home" | "picker" | "play";
 type HomeTab = "local" | "sync";
 type PlayMode = "local" | "sync";
 type SyncRole = "host" | "joiner" | null;
@@ -43,7 +72,7 @@ type Player = {
   name: string;
 };
 
-type RowColor = "red" | "yellow" | "green" | "blue";
+type RowColor = ScoreCardColor;
 
 type RowState = {
   selected: number[];
@@ -143,6 +172,8 @@ type LatestSyncState = {
   selectedPlayerId: string | null;
   showHints: boolean;
   syncHintsLockedOff: boolean;
+  gameScoreCardId: number;
+  syncScoreCardId: number | null;
 };
 
 type PlayStatePatch = {
@@ -160,6 +191,8 @@ type PlayStatePatch = {
   selectedPlayerId?: string | null;
   showHints?: boolean;
   syncHintsLockedOff?: boolean;
+  gameScoreCardId?: number;
+  syncScoreCardId?: number | null;
   rollAnimationKey?: number;
 };
 
@@ -175,13 +208,7 @@ type ActiveGame = {
   gameOver: boolean;
   gameOverReason: GameOverReason;
   undoStack: GameSnapshot[];
-};
-
-type RowConfig = {
-  color: RowColor;
-  label: string;
-  numbers: number[];
-  finalNumber: number;
+  scoreCardId?: number;
 };
 
 const PLAYERS_KEY = "qwixx.players.v1";
@@ -189,39 +216,13 @@ const SELECTED_PLAYER_KEY = "qwixx.selectedPlayer.v1";
 const SHOW_HINTS_KEY = "qwixx.showHints.v1";
 const ACTIVE_GAME_KEY = "qwixx.activeGame.v1";
 const SYNC_NAME_KEY = "qwixx.syncName.v1";
+const SELECTED_SCORE_CARD_KEY = "qwixx.selectedScoreCard.v1";
+const SCORE_CARD_FILTERS_KEY = "qwixx.scoreCardFilters.v1";
 
-const ROW_COLORS = ["red", "yellow", "green", "blue"] as const;
 const SUM_NUMBERS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
 const SCORE_VALUES = [0, 1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66, 78] as const;
 const MAX_PENALTIES = 4;
 const PENALTY_POINTS = 5;
-
-const ROW_CONFIGS: Record<RowColor, RowConfig> = {
-  red: {
-    color: "red",
-    label: "Red",
-    numbers: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-    finalNumber: 12,
-  },
-  yellow: {
-    color: "yellow",
-    label: "Yellow",
-    numbers: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-    finalNumber: 12,
-  },
-  green: {
-    color: "green",
-    label: "Green",
-    numbers: [12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2],
-    finalNumber: 2,
-  },
-  blue: {
-    color: "blue",
-    label: "Blue",
-    numbers: [12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2],
-    finalNumber: 2,
-  },
-};
 
 const DICE_LAYOUT = [
   { key: "whiteA", color: "white", row: 1, column: 1 },
@@ -231,6 +232,20 @@ const DICE_LAYOUT = [
   { key: "yellow", color: "yellow", row: 2, column: 2 },
   { key: "blue", color: "blue", row: 2, column: 3 },
 ] as const;
+
+const SCORE_COLOR_BACKGROUNDS: Record<RowColor, string> = {
+  red: "var(--red)",
+  yellow: "var(--yellow)",
+  green: "var(--green)",
+  blue: "var(--blue)",
+};
+
+const SCORE_COLOR_TILE_FILLS: Record<RowColor, string> = {
+  red: "#fca5a5",
+  yellow: "#fde68a",
+  green: "#86efac",
+  blue: "#93c5fd",
+};
 
 function createId() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -258,12 +273,13 @@ function createEmptyTurn(): TurnDraft {
   };
 }
 
-function createFreshGame(players: Player[], selectedPlayerId: string): ActiveGame {
+function createFreshGame(players: Player[], selectedPlayerId: string, scoreCardId: number): ActiveGame {
   return {
     mode: "local",
     page: "play",
     players,
     selectedPlayerId,
+    scoreCardId,
     currentPlayerIndex: 0,
     rows: createEmptyRows(),
     penalties: 0,
@@ -275,7 +291,7 @@ function createFreshGame(players: Player[], selectedPlayerId: string): ActiveGam
 }
 
 function isRowColor(value: unknown): value is RowColor {
-  return typeof value === "string" && (ROW_COLORS as readonly string[]).includes(value);
+  return isScoreCardColor(value);
 }
 
 function isValidSum(value: unknown): value is number {
@@ -377,7 +393,7 @@ function normalizePlayers(value: unknown): Player[] {
     .filter((player): player is Player => Boolean(player));
 }
 
-function normalizeRows(value: unknown): RowsState {
+function normalizeRows(value: unknown, scoreCard: ScoreCardPreset = getScoreCard(DEFAULT_SCORE_CARD_ID)): RowsState {
   const rows = createEmptyRows();
 
   if (!value || typeof value !== "object") {
@@ -390,10 +406,10 @@ function normalizeRows(value: unknown): RowsState {
     const rawRow = rawRows[row];
     const selected = Array.isArray(rawRow?.selected)
       ? rawRow.selected
-          .filter((number): number is number => ROW_CONFIGS[row].numbers.includes(Number(number)))
+          .filter((number): number is number => getScoreCardNumbers(scoreCard, row).includes(Number(number)))
           .map(Number)
           .filter((number, index, values) => values.indexOf(number) === index)
-          .sort((left, right) => visualIndex(row, left) - visualIndex(row, right))
+          .sort((left, right) => visualIndex(scoreCard, row, left) - visualIndex(scoreCard, row, right))
       : [];
     const lock = rawRow?.lock === "own" || rawRow?.lock === "opponent" ? rawRow.lock : "none";
 
@@ -428,7 +444,7 @@ function normalizeRoll(value: unknown): DiceRoll | null {
   return roll;
 }
 
-function normalizeTurnCore(value: unknown): TurnCore {
+function normalizeTurnCore(value: unknown, scoreCard: ScoreCardPreset = getScoreCard(DEFAULT_SCORE_CARD_ID)): TurnCore {
   const turn: TurnCore = {
     roll: null,
     opponentWhiteSum: null,
@@ -460,7 +476,7 @@ function normalizeTurnCore(value: unknown): TurnCore {
           const row = candidate.row;
           const number = Number(candidate.number);
 
-          if (!isRowColor(row) || !ROW_CONFIGS[row].numbers.includes(number)) {
+          if (!isRowColor(row) || !getScoreCardNumbers(scoreCard, row).includes(number)) {
             return null;
           }
 
@@ -474,7 +490,10 @@ function normalizeTurnCore(value: unknown): TurnCore {
   return turn;
 }
 
-function normalizeUndoEntry(value: unknown): UndoEntry | null {
+function normalizeUndoEntry(
+  value: unknown,
+  scoreCard: ScoreCardPreset = getScoreCard(DEFAULT_SCORE_CARD_ID),
+): UndoEntry | null {
   if (!value || typeof value !== "object") {
     return null;
   }
@@ -493,16 +512,16 @@ function normalizeUndoEntry(value: unknown): UndoEntry | null {
   }
 
   return {
-    before: normalizeTurnCore(rawEntry.before),
+    before: normalizeTurnCore(rawEntry.before, scoreCard),
     kind,
   };
 }
 
-function normalizeTurn(value: unknown): TurnDraft {
-  const core = normalizeTurnCore(value);
+function normalizeTurn(value: unknown, scoreCard: ScoreCardPreset = getScoreCard(DEFAULT_SCORE_CARD_ID)): TurnDraft {
+  const core = normalizeTurnCore(value, scoreCard);
   const rawTurn = value && typeof value === "object" ? (value as Partial<TurnDraft>) : null;
   const history = Array.isArray(rawTurn?.history)
-    ? rawTurn.history.map(normalizeUndoEntry).filter((entry): entry is UndoEntry => Boolean(entry))
+    ? rawTurn.history.map((entry) => normalizeUndoEntry(entry, scoreCard)).filter((entry): entry is UndoEntry => Boolean(entry))
     : [];
 
   return {
@@ -515,7 +534,7 @@ function normalizeGameOverReason(value: unknown): GameOverReason {
   return value === "rows" || value === "ownPenalties" || value === "opponentPenalties" ? value : null;
 }
 
-function normalizeGameSnapshot(value: unknown, playerCount: number): GameSnapshot | null {
+function normalizeGameSnapshot(value: unknown, playerCount: number, scoreCard: ScoreCardPreset): GameSnapshot | null {
   if (!value || typeof value !== "object") {
     return null;
   }
@@ -530,9 +549,9 @@ function normalizeGameSnapshot(value: unknown, playerCount: number): GameSnapsho
 
   return {
     currentPlayerIndex,
-    rows: normalizeRows(snapshot.rows),
+    rows: normalizeRows(snapshot.rows, scoreCard),
     penalties: Number.isInteger(penalties) ? Math.max(0, Math.min(MAX_PENALTIES, penalties)) : 0,
-    turn: normalizeTurn(snapshot.turn),
+    turn: normalizeTurn(snapshot.turn, scoreCard),
     gameOver: snapshot.gameOver === true,
     gameOverReason: normalizeGameOverReason(snapshot.gameOverReason),
   };
@@ -571,6 +590,21 @@ function readStoredSyncName() {
   }
 }
 
+function readStoredScoreCardSelection() {
+  try {
+    const filters = normalizeScoreCardFilters(JSON.parse(localStorage.getItem(SCORE_CARD_FILTERS_KEY) ?? "null"));
+    const storedId = normalizeScoreCardId(localStorage.getItem(SELECTED_SCORE_CARD_KEY), DEFAULT_SCORE_CARD_ID);
+    const id = ensureFilteredScoreCardId(storedId, filters);
+
+    return { id, filters };
+  } catch {
+    return {
+      id: DEFAULT_SCORE_CARD_ID,
+      filters: cloneScoreCardFilters(DEFAULT_SCORE_CARD_FILTERS),
+    };
+  }
+}
+
 function readActiveGame(): ActiveGame | null {
   try {
     const raw = localStorage.getItem(ACTIVE_GAME_KEY);
@@ -586,6 +620,8 @@ function readActiveGame(): ActiveGame | null {
     const currentPlayerIndex = Number(game.currentPlayerIndex);
     const penalties = Number(game.penalties);
     const gameOverReason = normalizeGameOverReason(game.gameOverReason);
+    const scoreCardId = normalizeScoreCardId(game.scoreCardId, DEFAULT_SCORE_CARD_ID);
+    const scoreCard = getScoreCard(scoreCardId);
 
     if (
       game.page !== "play" ||
@@ -602,15 +638,16 @@ function readActiveGame(): ActiveGame | null {
       page: "play",
       players,
       selectedPlayerId,
+      scoreCardId,
       currentPlayerIndex,
-      rows: normalizeRows(game.rows),
+      rows: normalizeRows(game.rows, scoreCard),
       penalties: Number.isInteger(penalties) ? Math.max(0, Math.min(MAX_PENALTIES, penalties)) : 0,
-      turn: normalizeTurn(game.turn),
+      turn: normalizeTurn(game.turn, scoreCard),
       gameOver: game.gameOver === true,
       gameOverReason,
       undoStack: Array.isArray(game.undoStack)
         ? game.undoStack
-            .map((snapshot) => normalizeGameSnapshot(snapshot, players.length))
+            .map((snapshot) => normalizeGameSnapshot(snapshot, players.length, scoreCard))
             .filter((snapshot): snapshot is GameSnapshot => Boolean(snapshot))
         : [],
     };
@@ -645,15 +682,19 @@ function rollDie() {
   return (Math.floor(Math.random() * 6) + 1) as 1 | 2 | 3 | 4 | 5 | 6;
 }
 
-function rollDice(rows: RowsState): DiceRoll {
+function isDieAvailable(color: RowColor, rows: RowsState, scoreCard: ScoreCardPreset) {
+  return ROW_COLORS.every((row) => rows[row].lock === "none" || getScoreCardLockColor(scoreCard, row) !== color);
+}
+
+function rollDice(rows: RowsState, scoreCard: ScoreCardPreset): DiceRoll {
   const roll: DiceRoll = {
     whiteA: rollDie(),
     whiteB: rollDie(),
   };
 
-  ROW_COLORS.forEach((row) => {
-    if (rows[row].lock === "none") {
-      roll[row] = rollDie();
+  ROW_COLORS.forEach((color) => {
+    if (isDieAvailable(color, rows, scoreCard)) {
+      roll[color] = rollDie();
     }
   });
 
@@ -664,8 +705,8 @@ function markKey(mark: ScoreMark) {
   return `${mark.row}-${mark.number}`;
 }
 
-function visualIndex(row: RowColor, number: number) {
-  return ROW_CONFIGS[row].numbers.indexOf(number);
+function visualIndex(scoreCard: ScoreCardPreset, row: RowColor, number: number) {
+  return getScoreCardNumbers(scoreCard, row).indexOf(number);
 }
 
 function getCommittedClosedCount(rows: RowsState) {
@@ -677,25 +718,25 @@ function getSelectedCountForRow(row: RowColor, rows: RowsState, turn: TurnDraft)
   return rows[row].selected.length + stagedCount;
 }
 
-function getRightmostSelectedIndex(row: RowColor, rows: RowsState, turn: TurnDraft) {
+function getRightmostSelectedIndex(scoreCard: ScoreCardPreset, row: RowColor, rows: RowsState, turn: TurnDraft) {
   const indexes = [
-    ...rows[row].selected.map((number) => visualIndex(row, number)),
-    ...turn.selectedMarks.filter((mark) => mark.row === row).map((mark) => visualIndex(row, mark.number)),
+    ...rows[row].selected.map((number) => visualIndex(scoreCard, row, number)),
+    ...turn.selectedMarks.filter((mark) => mark.row === row).map((mark) => visualIndex(scoreCard, row, mark.number)),
   ];
 
   return indexes.length > 0 ? Math.max(...indexes) : -1;
 }
 
-function hasStagedOwnLock(row: RowColor, turn: TurnDraft) {
-  return turn.selectedMarks.some((mark) => mark.row === row && mark.number === ROW_CONFIGS[row].finalNumber);
+function hasStagedOwnLock(scoreCard: ScoreCardPreset, row: RowColor, turn: TurnDraft) {
+  return turn.selectedMarks.some((mark) => mark.row === row && mark.number === getScoreCardFinalTile(scoreCard, row).number);
 }
 
-function isRowUnavailableThisTurn(row: RowColor, rows: RowsState, turn: TurnDraft) {
-  return rows[row].lock !== "none" || turn.opponentLocks.includes(row) || hasStagedOwnLock(row, turn);
+function isRowUnavailableThisTurn(scoreCard: ScoreCardPreset, row: RowColor, rows: RowsState, turn: TurnDraft) {
+  return rows[row].lock !== "none" || turn.opponentLocks.includes(row) || hasStagedOwnLock(scoreCard, row, turn);
 }
 
-function canPhysicallySelectMark(row: RowColor, number: number, rows: RowsState, turn: TurnDraft) {
-  if (isRowUnavailableThisTurn(row, rows, turn)) {
+function canPhysicallySelectMark(scoreCard: ScoreCardPreset, row: RowColor, number: number, rows: RowsState, turn: TurnDraft) {
+  if (isRowUnavailableThisTurn(scoreCard, row, rows, turn)) {
     return false;
   }
 
@@ -703,17 +744,17 @@ function canPhysicallySelectMark(row: RowColor, number: number, rows: RowsState,
     return false;
   }
 
-  if (!ROW_CONFIGS[row].numbers.includes(number)) {
+  if (!getScoreCardNumbers(scoreCard, row).includes(number)) {
     return false;
   }
 
-  const index = visualIndex(row, number);
+  const index = visualIndex(scoreCard, row, number);
 
-  if (index <= getRightmostSelectedIndex(row, rows, turn)) {
+  if (index <= getRightmostSelectedIndex(scoreCard, row, rows, turn)) {
     return false;
   }
 
-  if (number === ROW_CONFIGS[row].finalNumber && getSelectedCountForRow(row, rows, turn) < 5) {
+  if (number === getScoreCardFinalTile(scoreCard, row).number && getSelectedCountForRow(row, rows, turn) < 5) {
     return false;
   }
 
@@ -748,26 +789,35 @@ function getMixedSums(turn: TurnDraft) {
   return sums;
 }
 
-function getRolesForMark(mark: ScoreMark, whiteSum: number | null, mixedSums: Partial<Record<RowColor, number[]>>) {
+function getRolesForMark(
+  scoreCard: ScoreCardPreset,
+  mark: ScoreMark,
+  whiteSum: number | null,
+  mixedSums: Partial<Record<RowColor, number[]>>,
+) {
   const roles: MarkRole[] = [];
+  const tile = getScoreCardTile(scoreCard, mark.row, mark.number);
 
   if (whiteSum === mark.number) {
     roles.push("white");
   }
 
-  if (mixedSums[mark.row]?.includes(mark.number)) {
+  if (tile && mixedSums[tile.color]?.includes(mark.number)) {
     roles.push("mixed");
   }
 
   return roles;
 }
 
-function isValidRoleOrder(whiteMark: ScoreMark, mixedMark: ScoreMark) {
+function isValidRoleOrder(scoreCard: ScoreCardPreset, whiteMark: ScoreMark, mixedMark: ScoreMark) {
   // White must be visually first only when both marks live in the same row.
-  return whiteMark.row !== mixedMark.row || visualIndex(whiteMark.row, whiteMark.number) < visualIndex(mixedMark.row, mixedMark.number);
+  return (
+    whiteMark.row !== mixedMark.row ||
+    visualIndex(scoreCard, whiteMark.row, whiteMark.number) < visualIndex(scoreCard, mixedMark.row, mixedMark.number)
+  );
 }
 
-function getValidUserRoleAssignments(marks: ScoreMark[], turn: TurnDraft) {
+function getValidUserRoleAssignments(scoreCard: ScoreCardPreset, marks: ScoreMark[], turn: TurnDraft) {
   const whiteSum = getWhiteSum(turn, true);
   const mixedSums = getMixedSums(turn);
 
@@ -776,32 +826,32 @@ function getValidUserRoleAssignments(marks: ScoreMark[], turn: TurnDraft) {
   }
 
   if (marks.length === 1) {
-    return getRolesForMark(marks[0], whiteSum, mixedSums).map((role) => [role]);
+    return getRolesForMark(scoreCard, marks[0], whiteSum, mixedSums).map((role) => [role]);
   }
 
-  const firstRoles = getRolesForMark(marks[0], whiteSum, mixedSums);
-  const secondRoles = getRolesForMark(marks[1], whiteSum, mixedSums);
+  const firstRoles = getRolesForMark(scoreCard, marks[0], whiteSum, mixedSums);
+  const secondRoles = getRolesForMark(scoreCard, marks[1], whiteSum, mixedSums);
   const assignments: MarkRole[][] = [];
 
-  if (firstRoles.includes("white") && secondRoles.includes("mixed") && isValidRoleOrder(marks[0], marks[1])) {
+  if (firstRoles.includes("white") && secondRoles.includes("mixed") && isValidRoleOrder(scoreCard, marks[0], marks[1])) {
     assignments.push(["white", "mixed"]);
   }
 
-  if (firstRoles.includes("mixed") && secondRoles.includes("white") && isValidRoleOrder(marks[1], marks[0])) {
+  if (firstRoles.includes("mixed") && secondRoles.includes("white") && isValidRoleOrder(scoreCard, marks[1], marks[0])) {
     assignments.push(["mixed", "white"]);
   }
 
   return assignments;
 }
 
-function hasValidUserInterpretation(marks: ScoreMark[], turn: TurnDraft) {
-  return getValidUserRoleAssignments(marks, turn).length > 0;
+function hasValidUserInterpretation(scoreCard: ScoreCardPreset, marks: ScoreMark[], turn: TurnDraft) {
+  return getValidUserRoleAssignments(scoreCard, marks, turn).length > 0;
 }
 
-function getCandidateMarks(rows: RowsState, turn: TurnDraft) {
+function getCandidateMarks(scoreCard: ScoreCardPreset, rows: RowsState, turn: TurnDraft) {
   return ROW_COLORS.flatMap((row) =>
-    ROW_CONFIGS[row].numbers
-      .filter((number) => canPhysicallySelectMark(row, number, rows, turn))
+    getScoreCardNumbers(scoreCard, row)
+      .filter((number) => canPhysicallySelectMark(scoreCard, row, number, rows, turn))
       .map((number) => ({ row, number })),
   );
 }
@@ -812,12 +862,14 @@ function getLegalMarkRoleMap({
   isUserTurn,
   mode = "local",
   gameOver,
+  scoreCard,
 }: {
   rows: RowsState;
   turn: TurnDraft;
   isUserTurn: boolean;
   mode?: PlayMode;
   gameOver: boolean;
+  scoreCard: ScoreCardPreset;
 }) {
   const roleMap = new Map<string, Set<MarkRole>>();
 
@@ -836,7 +888,7 @@ function getLegalMarkRoleMap({
       return roleMap;
     }
 
-    getCandidateMarks(rows, turn)
+    getCandidateMarks(scoreCard, rows, turn)
       .filter((mark) => mark.number === whiteSum)
       .forEach((mark) => roleMap.set(markKey(mark), new Set(["white"])));
     return roleMap;
@@ -846,8 +898,8 @@ function getLegalMarkRoleMap({
     return roleMap;
   }
 
-  getCandidateMarks(rows, turn).forEach((mark) => {
-    const assignments = getValidUserRoleAssignments([...turn.selectedMarks, mark], turn);
+  getCandidateMarks(scoreCard, rows, turn).forEach((mark) => {
+    const assignments = getValidUserRoleAssignments(scoreCard, [...turn.selectedMarks, mark], turn);
     const legalRoles = new Set<MarkRole>();
     const roleIndex = turn.selectedMarks.length;
 
@@ -878,17 +930,24 @@ function canSelectPenalty(turn: TurnDraft, isUserTurn: boolean, penalties: numbe
   );
 }
 
-function canStageOpponentLock(row: RowColor, rows: RowsState, turn: TurnDraft, diceStageDone: boolean, gameOver: boolean) {
+function canStageOpponentLock(
+  scoreCard: ScoreCardPreset,
+  row: RowColor,
+  rows: RowsState,
+  turn: TurnDraft,
+  diceStageDone: boolean,
+  gameOver: boolean,
+) {
   return (
     !gameOver &&
     diceStageDone &&
     rows[row].lock === "none" &&
     !turn.opponentLocks.includes(row) &&
-    !hasStagedOwnLock(row, turn)
+    !hasStagedOwnLock(scoreCard, row, turn)
   );
 }
 
-function canAdvanceTurn(turn: TurnDraft, isUserTurn: boolean, gameOver: boolean) {
+function canAdvanceTurn(scoreCard: ScoreCardPreset, turn: TurnDraft, isUserTurn: boolean, gameOver: boolean) {
   if (gameOver) {
     return false;
   }
@@ -902,41 +961,64 @@ function canAdvanceTurn(turn: TurnDraft, isUserTurn: boolean, gameOver: boolean)
       return turn.selectedMarks.length === 0;
     }
 
-    return hasValidUserInterpretation(turn.selectedMarks, turn);
+    return hasValidUserInterpretation(scoreCard, turn.selectedMarks, turn);
   }
 
   return turn.opponentWhiteSum !== null;
 }
 
-function getPreviewColorCount(row: RowColor, rows: RowsState, turn: TurnDraft) {
-  const committed = rows[row].selected.length + (rows[row].lock === "own" ? 1 : 0);
-  const stagedMarks = turn.selectedMarks.filter((mark) => mark.row === row).length;
-  const stagedLock = hasStagedOwnLock(row, turn) ? 1 : 0;
-  return committed + stagedMarks + stagedLock;
+function getPreviewColorCount(color: RowColor, scoreCard: ScoreCardPreset, rows: RowsState, turn: TurnDraft) {
+  let count = 0;
+
+  ROW_COLORS.forEach((row) => {
+    rows[row].selected.forEach((number) => {
+      if (getScoreCardTile(scoreCard, row, number)?.color === color) {
+        count += 1;
+      }
+    });
+
+    turn.selectedMarks.forEach((mark) => {
+      if (mark.row === row && getScoreCardTile(scoreCard, mark.row, mark.number)?.color === color) {
+        count += 1;
+      }
+    });
+
+    if ((rows[row].lock === "own" || hasStagedOwnLock(scoreCard, row, turn)) && getScoreCardLockColor(scoreCard, row) === color) {
+      count += 1;
+    }
+  });
+
+  return count;
 }
 
-function getColorScore(row: RowColor, rows: RowsState, turn: TurnDraft) {
-  return SCORE_VALUES[Math.min(12, getPreviewColorCount(row, rows, turn))];
+function getColorScore(color: RowColor, scoreCard: ScoreCardPreset, rows: RowsState, turn: TurnDraft) {
+  return SCORE_VALUES[Math.min(12, getPreviewColorCount(color, scoreCard, rows, turn))];
 }
 
 function getPenaltyCount(penalties: number, turn: TurnDraft) {
   return penalties + (turn.penalty ? 1 : 0);
 }
 
-function getTotalScore(rows: RowsState, penalties: number, turn: TurnDraft) {
-  const colorTotal = ROW_COLORS.reduce((total, row) => total + getColorScore(row, rows, turn), 0);
+function getTotalScore(scoreCard: ScoreCardPreset, rows: RowsState, penalties: number, turn: TurnDraft) {
+  const colorTotal = ROW_COLORS.reduce((total, row) => total + getColorScore(row, scoreCard, rows, turn), 0);
   return colorTotal - getPenaltyCount(penalties, turn) * PENALTY_POINTS;
 }
 
-function getOwnClosedRows(turn: TurnDraft) {
-  return ROW_COLORS.filter((row) => hasStagedOwnLock(row, turn));
+function getOwnClosedRows(scoreCard: ScoreCardPreset, turn: TurnDraft) {
+  return ROW_COLORS.filter((row) => hasStagedOwnLock(scoreCard, row, turn));
 }
 
-function createReadyPayload(turnId: string, playerId: string, penalties: number, turn: TurnDraft): SyncReadyPayload {
+function createReadyPayload(
+  scoreCard: ScoreCardPreset,
+  turnId: string,
+  playerId: string,
+  penalties: number,
+  turn: TurnDraft,
+): SyncReadyPayload {
   return {
     turnId,
     playerId,
-    closedRows: getOwnClosedRows(turn),
+    closedRows: getOwnClosedRows(scoreCard, turn),
     reachedFourPenalties: penalties + (turn.penalty ? 1 : 0) >= MAX_PENALTIES,
   };
 }
@@ -956,18 +1038,18 @@ function getPenaltyPlayerIds(payloads: SyncReadyPayload[]) {
     .map((payload) => payload.playerId);
 }
 
-function commitLocalTurnState(rows: RowsState, penalties: number, turn: TurnDraft) {
+function commitLocalTurnState(scoreCard: ScoreCardPreset, rows: RowsState, penalties: number, turn: TurnDraft) {
   const nextRows = cloneRows(rows);
 
   turn.selectedMarks.forEach((mark) => {
     if (!nextRows[mark.row].selected.includes(mark.number)) {
       nextRows[mark.row].selected.push(mark.number);
-      nextRows[mark.row].selected.sort((left, right) => visualIndex(mark.row, left) - visualIndex(mark.row, right));
+      nextRows[mark.row].selected.sort((left, right) => visualIndex(scoreCard, mark.row, left) - visualIndex(scoreCard, mark.row, right));
     }
   });
 
   ROW_COLORS.forEach((row) => {
-    if (hasStagedOwnLock(row, turn)) {
+    if (hasStagedOwnLock(scoreCard, row, turn)) {
       nextRows[row].lock = "own";
     }
   });
@@ -1071,15 +1153,17 @@ function orderedNamesForPlayerIds(players: Player[], playerIds: string[]) {
   return orderedIds.map((playerId) => playerName(players, playerId));
 }
 
-function formatSyncAdvanceToast(closedBy: SyncClosedBy[], penaltyPlayerIds: string[], players: Player[]) {
-  const closureMessages = ROW_COLORS.flatMap((row) => {
-    const rowPlayerIds = closedBy.filter((entry) => entry.row === row).map((entry) => entry.playerId);
+function formatSyncAdvanceToast(scoreCard: ScoreCardPreset, closedBy: SyncClosedBy[], penaltyPlayerIds: string[], players: Player[]) {
+  const closureMessages = ROW_COLORS.flatMap((color) => {
+    const rowPlayerIds = closedBy
+      .filter((entry) => getScoreCardLockColor(scoreCard, entry.row) === color)
+      .map((entry) => entry.playerId);
 
     if (rowPlayerIds.length === 0) {
       return [];
     }
 
-    return [`${formatNameList(orderedNamesForPlayerIds(players, rowPlayerIds))} closed ${row}`];
+    return [`${formatNameList(orderedNamesForPlayerIds(players, rowPlayerIds))} closed ${color}`];
   });
   const penaltyMessage =
     penaltyPlayerIds.length > 0
@@ -1092,9 +1176,18 @@ function formatSyncAdvanceToast(closedBy: SyncClosedBy[], penaltyPlayerIds: stri
 function App() {
   const savedGameRef = useRef<ActiveGame | null>(readActiveGame());
   const savedGame = savedGameRef.current;
+  const storedScoreCardSelectionRef = useRef(readStoredScoreCardSelection());
+  const storedScoreCardSelection = storedScoreCardSelectionRef.current;
   const [page, setPage] = useState<Page>(savedGame?.page ?? "home");
   const [mode, setMode] = useState<PlayMode>("local");
   const [homeTab, setHomeTab] = useState<HomeTab>("local");
+  const [scoreCardId, setScoreCardId] = useState(storedScoreCardSelection.id);
+  const [scoreCardFilters, setScoreCardFilters] = useState<ScoreCardFilters>(storedScoreCardSelection.filters);
+  const [gameScoreCardId, setGameScoreCardId] = useState(savedGame?.scoreCardId ?? storedScoreCardSelection.id);
+  const [syncScoreCardId, setSyncScoreCardId] = useState<number | null>(null);
+  const [pickerContext, setPickerContext] = useState<"local" | "syncHost" | null>(null);
+  const [draftScoreCardId, setDraftScoreCardId] = useState(storedScoreCardSelection.id);
+  const [draftScoreCardFilters, setDraftScoreCardFilters] = useState<ScoreCardFilters>(storedScoreCardSelection.filters);
   const [players, setPlayers] = useState<Player[]>(savedGame?.players ?? readStoredPlayers);
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(
     savedGame?.selectedPlayerId ?? readSelectedPlayerId(),
@@ -1132,6 +1225,7 @@ function App() {
   const hostTransportRef = useRef<SyncHostTransport | null>(null);
   const joinTransportRef = useRef<SyncJoinTransport | null>(null);
   const syncToastTimeoutRef = useRef(0);
+  const pickerTopRef = useRef<HTMLDivElement>(null);
   const latestRef = useRef<LatestSyncState>({
     rows,
     penalties,
@@ -1146,8 +1240,15 @@ function App() {
     selectedPlayerId,
     showHints,
     syncHintsLockedOff,
+    gameScoreCardId,
+    syncScoreCardId,
   });
 
+  const scoreCard = getScoreCard(gameScoreCardId);
+  const personalScoreCard = getScoreCard(scoreCardId);
+  const syncHomeScoreCard = syncRole === "host" ? personalScoreCard : syncScoreCardId ? getScoreCard(syncScoreCardId) : null;
+  const draftScoreCard = getScoreCard(draftScoreCardId);
+  const draftVisibleScoreCards = getFilteredScoreCards(draftScoreCardFilters);
   const selectedPlayerExists = selectedPlayerId ? players.some((player) => player.id === selectedPlayerId) : false;
   const currentPlayer = gamePlayers[currentPlayerIndex] ?? null;
   const isUserTurn = Boolean(currentPlayer && currentPlayer.id === selectedPlayerId);
@@ -1163,19 +1264,19 @@ function App() {
   const whiteSum = getWhiteSum(turn, isUserTurn, mode);
   const diceStageDone = Boolean(whiteSum);
   const legalMarkRoles = useMemo(
-    () => getLegalMarkRoleMap({ rows, turn, isUserTurn, mode, gameOver: gameOver || isLocalReady }),
-    [rows, turn, isUserTurn, mode, gameOver, isLocalReady],
+    () => getLegalMarkRoleMap({ rows, turn, isUserTurn, mode, gameOver: gameOver || isLocalReady, scoreCard }),
+    [rows, turn, isUserTurn, mode, gameOver, isLocalReady, scoreCard],
   );
   const legalMarkKeys = useMemo(() => new Set(legalMarkRoles.keys()), [legalMarkRoles]);
-  const nextEnabled = canAdvanceTurn(turn, isUserTurn, gameOver);
+  const nextEnabled = canAdvanceTurn(scoreCard, turn, isUserTurn, gameOver);
   const readyEnabled = isSyncMode
     ? !gameOver &&
       syncPhase === "turn" &&
       !isLocalReady &&
-      (isUserTurn ? canAdvanceTurn(turn, true, false) : Boolean(turn.roll))
+      (isUserTurn ? canAdvanceTurn(scoreCard, turn, true, false) : Boolean(turn.roll))
     : false;
   const penaltyEnabled = canSelectPenalty(turn, isUserTurn, penalties, gameOver || isLocalReady);
-  const totalScore = getTotalScore(rows, penalties, turn);
+  const totalScore = getTotalScore(scoreCard, rows, penalties, turn);
   const penaltyCount = getPenaltyCount(penalties, turn);
   const syncPenaltyLabel = `${formatNameList(orderedNamesForPlayerIds(gamePlayers, syncPenaltyPlayerIds))} reached 4 penalties`;
   const canStart =
@@ -1238,6 +1339,14 @@ function App() {
       latestUpdates.syncHintsLockedOff = patch.syncHintsLockedOff;
     }
 
+    if ("gameScoreCardId" in patch && typeof patch.gameScoreCardId === "number") {
+      latestUpdates.gameScoreCardId = patch.gameScoreCardId;
+    }
+
+    if ("syncScoreCardId" in patch) {
+      latestUpdates.syncScoreCardId = patch.syncScoreCardId ?? null;
+    }
+
     if (Object.keys(latestUpdates).length > 0) {
       syncLatestState(latestUpdates);
     }
@@ -1298,6 +1407,14 @@ function App() {
       setSyncHintsLockedOff(patch.syncHintsLockedOff);
     }
 
+    if ("gameScoreCardId" in patch && typeof patch.gameScoreCardId === "number") {
+      setGameScoreCardId(patch.gameScoreCardId);
+    }
+
+    if ("syncScoreCardId" in patch) {
+      setSyncScoreCardId(patch.syncScoreCardId ?? null);
+    }
+
     if ("rollAnimationKey" in patch && typeof patch.rollAnimationKey === "number") {
       setRollAnimationKey(patch.rollAnimationKey);
     }
@@ -1328,9 +1445,14 @@ function App() {
     }, 4200);
   }
 
-  function applySyncAdvanceFeedback(closedBy: SyncClosedBy[], penaltyPlayerIds: string[], playersForNames: Player[]) {
+  function applySyncAdvanceFeedback(
+    scoreCard: ScoreCardPreset,
+    closedBy: SyncClosedBy[],
+    penaltyPlayerIds: string[],
+    playersForNames: Player[],
+  ) {
     setSyncPenaltyPlayerIds(penaltyPlayerIds);
-    showSyncToast(formatSyncAdvanceToast(closedBy, penaltyPlayerIds, playersForNames));
+    showSyncToast(formatSyncAdvanceToast(scoreCard, closedBy, penaltyPlayerIds, playersForNames));
   }
 
   useEffect(() => {
@@ -1348,6 +1470,14 @@ function App() {
   useEffect(() => {
     localStorage.setItem(SHOW_HINTS_KEY, showHints ? "true" : "false");
   }, [showHints]);
+
+  useEffect(() => {
+    localStorage.setItem(SELECTED_SCORE_CARD_KEY, String(scoreCardId));
+  }, [scoreCardId]);
+
+  useEffect(() => {
+    localStorage.setItem(SCORE_CARD_FILTERS_KEY, JSON.stringify(scoreCardFilters));
+  }, [scoreCardFilters]);
 
   useEffect(() => {
     localStorage.setItem(SYNC_NAME_KEY, syncName);
@@ -1369,6 +1499,7 @@ function App() {
       page: "play",
       players: gamePlayers,
       selectedPlayerId,
+      scoreCardId: gameScoreCardId,
       currentPlayerIndex,
       rows,
       penalties,
@@ -1384,6 +1515,7 @@ function App() {
     page,
     gamePlayers,
     selectedPlayerId,
+    gameScoreCardId,
     currentPlayerIndex,
     rows,
     penalties,
@@ -1409,6 +1541,8 @@ function App() {
       selectedPlayerId,
       showHints,
       syncHintsLockedOff,
+      gameScoreCardId,
+      syncScoreCardId,
     };
   }, [
     rows,
@@ -1424,6 +1558,8 @@ function App() {
     selectedPlayerId,
     showHints,
     syncHintsLockedOff,
+    gameScoreCardId,
+    syncScoreCardId,
   ]);
 
   useEffect(() => () => {
@@ -1508,7 +1644,7 @@ function App() {
     setDraggingPlayerId(playerId);
   }
 
-  function startGame(nextPlayers: Player[], nextSelectedPlayerId: string) {
+  function startGame(nextPlayers: Player[], nextSelectedPlayerId: string, nextScoreCardId = scoreCardId) {
     const orderedPlayers = nextPlayers
       .map((player) => ({ ...player, name: player.name.trim() }))
       .filter((player) => player.name.length > 0);
@@ -1517,7 +1653,7 @@ function App() {
       return;
     }
 
-    const game = createFreshGame(orderedPlayers, nextSelectedPlayerId);
+    const game = createFreshGame(orderedPlayers, nextSelectedPlayerId, nextScoreCardId);
 
     hostTransportRef.current?.close();
     joinTransportRef.current?.close();
@@ -1527,10 +1663,12 @@ function App() {
       syncRole: null,
       syncHostPlayerId: null,
       syncHintsLockedOff: false,
+      syncScoreCardId: null,
     });
     setMode("local");
     setSyncRole(null);
     setSyncHintsLockedOff(false);
+    setSyncScoreCardId(null);
     setSyncQrText("");
     setSyncAnswerText("");
     setSyncCameraMode(null);
@@ -1549,12 +1687,14 @@ function App() {
       syncReadyPayloads: [],
       syncPhase: "idle",
       syncHintsLockedOff: false,
+      syncScoreCardId: null,
+      gameScoreCardId: game.scoreCardId,
       selectedPlayerId: nextSelectedPlayerId,
       rollAnimationKey: 0,
     });
   }
 
-  function resetPlayState(nextPlayers: Player[], nextSelectedPlayerId: string) {
+  function resetPlayState(nextPlayers: Player[], nextSelectedPlayerId: string, nextScoreCardId = scoreCardId) {
     const nextRows = createEmptyRows();
     const nextTurn = createEmptyTurn();
 
@@ -1565,6 +1705,7 @@ function App() {
       gamePlayers: nextPlayers,
       currentPlayerIndex: 0,
       selectedPlayerId: nextSelectedPlayerId,
+      gameScoreCardId: nextScoreCardId,
       gameOver: false,
       gameOverReason: null,
       undoStack: [],
@@ -1584,12 +1725,14 @@ function App() {
       syncHostPlayerId: null,
       syncReadyPayloads: [],
       syncHintsLockedOff: false,
+      syncScoreCardId: null,
     });
     setSyncRole(null);
     setSyncPhase("idle");
     setSyncHostPlayerId(null);
     setSyncReadyPayloads([]);
     setSyncHintsLockedOff(false);
+    setSyncScoreCardId(null);
     setSyncQrText("");
     setSyncAnswerText("");
     setSyncCameraMode(null);
@@ -1635,8 +1778,11 @@ function App() {
       syncTurnId: turnId,
       syncReadyPayloads: [],
       syncHintsLockedOff: false,
+      syncScoreCardId: scoreCardId,
+      gameScoreCardId: scoreCardId,
     });
-    resetPlayState([hostPlayer], hostPlayer.id);
+    setSyncScoreCardId(scoreCardId);
+    resetPlayState([hostPlayer], hostPlayer.id, scoreCardId);
     void createHostOffer();
   }
 
@@ -1685,7 +1831,7 @@ function App() {
 
         syncLatestState({ gamePlayers: nextPlayers });
         setGamePlayers(nextPlayers);
-        hostTransport.broadcast({ type: "lobbyState", players: nextPlayers, hostPlayerId: latestRef.current.syncHostPlayerId });
+        broadcastLobbyState(nextPlayers);
       }
 
       await createHostOffer(`${joinedPlayer.name} joined`);
@@ -1758,6 +1904,7 @@ function App() {
       type: "lobbyState",
       players: nextPlayers,
       hostPlayerId: latestRef.current.syncHostPlayerId,
+      scoreCardId: latestRef.current.syncScoreCardId ?? scoreCardId,
     });
   }
 
@@ -1786,15 +1933,20 @@ function App() {
     if (message.type === "lobbyState") {
       const nextPlayers = normalizePlayers(message.players);
       const hostId = typeof message.hostPlayerId === "string" ? message.hostPlayerId : latestRef.current.syncHostPlayerId;
+      const nextScoreCardId = normalizeScoreCardId(
+        message.scoreCardId,
+        latestRef.current.syncScoreCardId ?? DEFAULT_SCORE_CARD_ID,
+      );
 
       if (nextPlayers.length > 0) {
         syncLatestState({ gamePlayers: nextPlayers });
         setGamePlayers(nextPlayers);
       }
 
-      syncLatestState({ syncHostPlayerId: hostId, syncPhase: "lobby" });
+      syncLatestState({ syncHostPlayerId: hostId, syncPhase: "lobby", syncScoreCardId: nextScoreCardId });
       setSyncHostPlayerId(hostId);
       setSyncPhase("lobby");
+      setSyncScoreCardId(nextScoreCardId);
       return;
     }
 
@@ -1802,12 +1954,16 @@ function App() {
       const nextPlayers = normalizePlayers(message.players);
       const turnId = typeof message.turnId === "string" ? message.turnId : nextTurnId();
       const nextHintsLockedOff = message.hintsLockedOff === true;
+      const nextScoreCardId = normalizeScoreCardId(
+        message.scoreCardId,
+        latestRef.current.syncScoreCardId ?? DEFAULT_SCORE_CARD_ID,
+      );
 
       if (nextPlayers.length === 0) {
         return;
       }
 
-      startSyncedPlay(nextPlayers, turnId, nextHintsLockedOff);
+      startSyncedPlay(nextPlayers, turnId, nextHintsLockedOff, nextScoreCardId);
       return;
     }
 
@@ -1873,8 +2029,12 @@ function App() {
       const nextPlayers = normalizePlayers(message.players);
       const turnId = typeof message.turnId === "string" ? message.turnId : nextTurnId();
       const nextHintsLockedOff = message.hintsLockedOff === true;
+      const nextScoreCardId = normalizeScoreCardId(
+        message.scoreCardId,
+        latestRef.current.syncScoreCardId ?? DEFAULT_SCORE_CARD_ID,
+      );
 
-      startSyncedPlay(nextPlayers.length > 0 ? nextPlayers : latestRef.current.gamePlayers, turnId, nextHintsLockedOff);
+      startSyncedPlay(nextPlayers.length > 0 ? nextPlayers : latestRef.current.gamePlayers, turnId, nextHintsLockedOff, nextScoreCardId);
       return;
     }
 
@@ -1891,7 +2051,12 @@ function App() {
     removeSyncPlayer(playerId);
   }
 
-  function startSyncedPlay(nextPlayers: Player[], turnId: string, nextHintsLockedOff = syncHintsLockedOff) {
+  function startSyncedPlay(
+    nextPlayers: Player[],
+    turnId: string,
+    nextHintsLockedOff = syncHintsLockedOff,
+    nextScoreCardId = latestRef.current.syncScoreCardId ?? scoreCardId,
+  ) {
     const nextRows = createEmptyRows();
     const nextTurn = createEmptyTurn();
     const nextShowHints = nextHintsLockedOff ? false : latestRef.current.showHints;
@@ -1911,6 +2076,8 @@ function App() {
       syncReadyPayloads: [],
       showHints: nextShowHints,
       syncHintsLockedOff: nextHintsLockedOff,
+      syncScoreCardId: nextScoreCardId,
+      gameScoreCardId: nextScoreCardId,
       rollAnimationKey: 0,
     });
     setMode("sync");
@@ -1923,12 +2090,14 @@ function App() {
     }
 
     const turnId = nextTurnId();
+    const nextScoreCardId = syncScoreCardId ?? scoreCardId;
 
-    startSyncedPlay(gamePlayers, turnId);
+    startSyncedPlay(gamePlayers, turnId, syncHintsLockedOff, nextScoreCardId);
     hostTransportRef.current?.broadcast({
       type: "gameStart",
       players: gamePlayers,
       hintsLockedOff: syncHintsLockedOff,
+      scoreCardId: nextScoreCardId,
       turnId,
     });
   }
@@ -1947,7 +2116,7 @@ function App() {
       return;
     }
 
-    const roll = rollDice(latest.rows);
+    const roll = rollDice(latest.rows, getScoreCard(latest.gameScoreCardId));
     const nextTurn = { ...latest.turn, roll };
 
     syncLatestState({ turn: nextTurn });
@@ -2023,7 +2192,7 @@ function App() {
       return;
     }
 
-    const payload = createReadyPayload(syncTurnId, selectedPlayerId, penalties, turn);
+    const payload = createReadyPayload(scoreCard, syncTurnId, selectedPlayerId, penalties, turn);
 
     if (isHost) {
       setHostReadyPayloads([
@@ -2062,7 +2231,8 @@ function App() {
     const nextTurn = typeof message.nextTurnId === "string" ? message.nextTurnId : nextTurnId();
     const nextGameOver = message.gameOver === true;
     const nextReason = normalizeGameOverReason(message.gameOverReason);
-    const committed = commitLocalTurnState(latest.rows, latest.penalties, latest.turn);
+    const latestScoreCard = getScoreCard(latest.gameScoreCardId);
+    const committed = commitLocalTurnState(latestScoreCard, latest.rows, latest.penalties, latest.turn);
     const withGlobalClosures = applyGlobalClosedRows(committed.rows, closedRows);
     const localReason = committed.penalties >= MAX_PENALTIES ? "ownPenalties" : nextReason;
     const nextGamePlayers = nextPlayers.length > 0 ? nextPlayers : latest.gamePlayers;
@@ -2082,7 +2252,7 @@ function App() {
       syncPhase: nextGameOver ? "gameOver" : "turn",
       rollAnimationKey: 0,
     });
-    applySyncAdvanceFeedback(closedBy, penaltyPlayerIds, nextGamePlayers);
+    applySyncAdvanceFeedback(latestScoreCard, closedBy, penaltyPlayerIds, nextGamePlayers);
   }
 
   function commitSyncReadyPayloads(activePayloads: SyncReadyPayload[]) {
@@ -2090,7 +2260,8 @@ function App() {
     const closedBy = createClosedBy(activePayloads);
     const closedRows = uniqueRows(closedBy.map((entry) => entry.row));
     const penaltyPlayerIds = getPenaltyPlayerIds(activePayloads);
-    const committed = commitLocalTurnState(latest.rows, latest.penalties, latest.turn);
+    const latestScoreCard = getScoreCard(latest.gameScoreCardId);
+    const committed = commitLocalTurnState(latestScoreCard, latest.rows, latest.penalties, latest.turn);
     const withGlobalClosures = applyGlobalClosedRows(committed.rows, closedRows);
     const anyPenaltyGameOver = penaltyPlayerIds.length > 0;
     const rowPenaltyState = getGameOverFromRowsAndPenalties(
@@ -2116,7 +2287,7 @@ function App() {
       syncPhase: nextGameOver ? "gameOver" : "turn",
       rollAnimationKey: 0,
     });
-    applySyncAdvanceFeedback(closedBy, penaltyPlayerIds, latest.gamePlayers);
+    applySyncAdvanceFeedback(latestScoreCard, closedBy, penaltyPlayerIds, latest.gamePlayers);
     hostTransportRef.current?.broadcast({
       type: "advanceResult",
       closedBy,
@@ -2214,6 +2385,8 @@ function App() {
       gameOver: false,
       gameOverReason: null,
       undoStack: [],
+      syncScoreCardId: null,
+      gameScoreCardId: scoreCardId,
     });
     setMode("sync");
     setPage("home");
@@ -2258,6 +2431,80 @@ function App() {
     });
   }
 
+  function openScoreCardPicker(context: "local" | "syncHost") {
+    const committedId = context === "syncHost" ? syncScoreCardId ?? scoreCardId : scoreCardId;
+    const nextFilters = cloneScoreCardFilters(scoreCardFilters);
+
+    setPickerContext(context);
+    setDraftScoreCardFilters(nextFilters);
+    setDraftScoreCardId(ensureFilteredScoreCardId(committedId, nextFilters));
+    setPage("picker");
+  }
+
+  function closeScoreCardPicker() {
+    setPage("home");
+    setHomeTab(pickerContext === "syncHost" ? "sync" : "local");
+    setPickerContext(null);
+  }
+
+  function confirmScoreCardPicker() {
+    const nextFilters = cloneScoreCardFilters(draftScoreCardFilters);
+    const nextScoreCardId = ensureFilteredScoreCardId(draftScoreCardId, nextFilters);
+
+    setScoreCardId(nextScoreCardId);
+    setScoreCardFilters(nextFilters);
+
+    if (pickerContext === "syncHost") {
+      setSyncScoreCardId(nextScoreCardId);
+      syncLatestState({ syncScoreCardId: nextScoreCardId, gameScoreCardId: nextScoreCardId });
+      broadcastLobbyState();
+    }
+
+    setPage("home");
+    setHomeTab(pickerContext === "syncHost" ? "sync" : "local");
+    setPickerContext(null);
+  }
+
+  function scrollPickerTop() {
+    window.requestAnimationFrame(() => {
+      pickerTopRef.current?.scrollIntoView({ block: "start" });
+    });
+  }
+
+  function selectDraftScoreCard(nextScoreCardId: number) {
+    setDraftScoreCardId(nextScoreCardId);
+    scrollPickerTop();
+  }
+
+  function randomizeDraftScoreCard() {
+    const cards = getFilteredScoreCards(draftScoreCardFilters);
+    const card = cards[Math.floor(Math.random() * cards.length)];
+
+    if (card) {
+      selectDraftScoreCard(card.id);
+    }
+  }
+
+  function toggleDraftScoreCardFilter(type: ScoreCardType) {
+    const checkedCount = SCORE_CARD_TYPES.filter((candidate) => draftScoreCardFilters[candidate]).length;
+
+    if (draftScoreCardFilters[type] && checkedCount === 1) {
+      return;
+    }
+
+    const nextFilters = {
+      ...draftScoreCardFilters,
+      [type]: !draftScoreCardFilters[type],
+    };
+    const safeFilters = hasAnyScoreCardFilter(nextFilters) ? nextFilters : cloneScoreCardFilters(DEFAULT_SCORE_CARD_FILTERS);
+    const nextScoreCardId = filtersIncludeScoreCard(safeFilters, draftScoreCardId)
+      ? draftScoreCardId
+      : firstFilteredScoreCardId(safeFilters);
+
+    setDraftScoreCardFilters(safeFilters);
+    setDraftScoreCardId(nextScoreCardId);
+  }
+
   function confirmStartOver() {
     if (!selectedPlayerId || gamePlayers.length === 0) {
       return;
@@ -2267,18 +2514,20 @@ function App() {
 
     if (mode === "sync" && isHost) {
       const nextTurn = nextTurnId();
+      const nextScoreCardId = syncScoreCardId ?? scoreCardId;
 
-      startSyncedPlay(gamePlayers, nextTurn, syncHintsLockedOff);
+      startSyncedPlay(gamePlayers, nextTurn, syncHintsLockedOff, nextScoreCardId);
       hostTransportRef.current?.broadcast({
         type: "hostStartOver",
         hintsLockedOff: syncHintsLockedOff,
         players: gamePlayers,
+        scoreCardId: nextScoreCardId,
         turnId: nextTurn,
       });
       return;
     }
 
-    startGame(gamePlayers, selectedPlayerId);
+    startGame(gamePlayers, selectedPlayerId, gameScoreCardId);
   }
 
   function exitToHome() {
@@ -2313,6 +2562,8 @@ function App() {
       gameOverReason: null,
       undoStack: [],
       syncHintsLockedOff: false,
+      syncScoreCardId: null,
+      gameScoreCardId: scoreCardId,
       rollAnimationKey: 0,
     });
   }
@@ -2333,7 +2584,7 @@ function App() {
       }
 
       return withUndoHistory(currentTurn, {
-        roll: rollDice(rows),
+        roll: rollDice(rows, scoreCard),
         opponentWhiteSum: null,
         selectedMarks: [],
         penalty: false,
@@ -2383,6 +2634,7 @@ function App() {
         isUserTurn,
         mode,
         gameOver: gameOver || isLocalReady,
+        scoreCard,
       });
 
       if (!currentLegalMarks.has(markKey(mark))) {
@@ -2424,12 +2676,12 @@ function App() {
       return;
     }
 
-    if (!canStageOpponentLock(row, rows, turn, diceStageDone, gameOver)) {
+    if (!canStageOpponentLock(scoreCard, row, rows, turn, diceStageDone, gameOver)) {
       return;
     }
 
     setTurn((currentTurn) => {
-      if (!canStageOpponentLock(row, rows, currentTurn, Boolean(getWhiteSum(currentTurn, isUserTurn, mode)), gameOver)) {
+      if (!canStageOpponentLock(scoreCard, row, rows, currentTurn, Boolean(getWhiteSum(currentTurn, isUserTurn, mode)), gameOver)) {
         return currentTurn;
       }
 
@@ -2531,7 +2783,7 @@ function App() {
       createGameSnapshot(currentPlayerIndex, rows, penalties, turn, gameOver, gameOverReason),
     ]);
 
-    const committed = commitLocalTurnState(rows, penalties, turn);
+    const committed = commitLocalTurnState(scoreCard, rows, penalties, turn);
     const nextState = getGameOverFromRowsAndPenalties(committed.rows, committed.penalties, gameOverReason);
 
     setRows(committed.rows);
@@ -2668,10 +2920,12 @@ function App() {
                   <h1>Game</h1>
                 </div>
 
+                <ScoreCardChoice scoreCard={personalScoreCard} onEdit={() => openScoreCardPicker("local")} />
+
                 <button
                   className="primary wide-button start-button"
                   type="button"
-                  onClick={() => selectedPlayerId && startGame(players, selectedPlayerId)}
+                  onClick={() => selectedPlayerId && startGame(players, selectedPlayerId, scoreCardId)}
                   disabled={!canStart}
                 >
                   Start
@@ -2717,37 +2971,40 @@ function App() {
               ) : null}
 
               {syncRole === "host" && syncPhase === "hostLobby" ? (
-                <SyncLobby
-                  isHost
-                  players={gamePlayers}
-                  localPlayerId={selectedPlayerId}
-                  hostPlayerId={syncHostPlayerId}
-                  readyPlayerIds={[]}
-                  syncMessage={syncMessage}
-                  onRandomize={() => {
-                    const nextPlayers = shufflePlayers(latestRef.current.gamePlayers);
+                <>
+                  <ScoreCardChoice scoreCard={personalScoreCard} onEdit={() => openScoreCardPicker("syncHost")} />
+                  <SyncLobby
+                    isHost
+                    players={gamePlayers}
+                    localPlayerId={selectedPlayerId}
+                    hostPlayerId={syncHostPlayerId}
+                    readyPlayerIds={[]}
+                    syncMessage={syncMessage}
+                    onRandomize={() => {
+                      const nextPlayers = shufflePlayers(latestRef.current.gamePlayers);
 
-                    syncLatestState({ gamePlayers: nextPlayers });
-                    setGamePlayers(nextPlayers);
-                    broadcastLobbyState(nextPlayers);
-                  }}
-                  onMove={(fromIndex, toIndex) => {
-                    const currentPlayers = latestRef.current.gamePlayers;
+                      syncLatestState({ gamePlayers: nextPlayers });
+                      setGamePlayers(nextPlayers);
+                      broadcastLobbyState(nextPlayers);
+                    }}
+                    onMove={(fromIndex, toIndex) => {
+                      const currentPlayers = latestRef.current.gamePlayers;
 
-                    if (toIndex < 0 || toIndex >= currentPlayers.length) {
-                      return;
-                    }
+                      if (toIndex < 0 || toIndex >= currentPlayers.length) {
+                        return;
+                      }
 
-                    const nextPlayers = moveItem(currentPlayers, fromIndex, toIndex);
+                      const nextPlayers = moveItem(currentPlayers, fromIndex, toIndex);
 
-                    syncLatestState({ gamePlayers: nextPlayers });
-                    setGamePlayers(nextPlayers);
-                    broadcastLobbyState(nextPlayers);
-                  }}
-                  onRemove={removeSyncPlayer}
-                  onScanAnswer={() => setSyncCameraMode("answer")}
-                  scanDisabled={isAcceptingAnswer}
-                />
+                      syncLatestState({ gamePlayers: nextPlayers });
+                      setGamePlayers(nextPlayers);
+                      broadcastLobbyState(nextPlayers);
+                    }}
+                    onRemove={removeSyncPlayer}
+                    onScanAnswer={() => setSyncCameraMode("answer")}
+                    scanDisabled={isAcceptingAnswer}
+                  />
+                </>
               ) : null}
 
               {syncRole === "host" && syncPhase === "hostLobby" ? (
@@ -2767,6 +3024,7 @@ function App() {
               {syncRole === "joiner" && (syncPhase === "showAnswer" || syncPhase === "lobby") ? (
                 <>
                   {syncAnswerText ? <QrPanel label="Answer QR" text={syncAnswerText} /> : null}
+                  {syncHomeScoreCard ? <ScoreCardChoice scoreCard={syncHomeScoreCard} /> : null}
                   <SyncLobby
                     isHost={false}
                     players={gamePlayers}
@@ -2781,6 +3039,64 @@ function App() {
               {syncMessage && syncPhase === "idle" ? <p className="sync-status">{syncMessage}</p> : null}
             </section>
           )}
+        </div>
+      ) : null}
+
+      {page === "picker" ? (
+        <div className="page-stack card-picker-page">
+          <section className="section-panel compact-panel" ref={pickerTopRef}>
+            <div className="top-actions">
+              <button className="icon-action" type="button" onClick={closeScoreCardPicker} aria-label="Back">
+                <X size={19} />
+              </button>
+              <button className="icon-action selected" type="button" onClick={confirmScoreCardPicker} aria-label="Confirm">
+                <Check size={19} />
+              </button>
+            </div>
+
+            <div className="section-heading">
+              <h1>Card #{draftScoreCard.id}</h1>
+              <button className="secondary" type="button" onClick={randomizeDraftScoreCard}>
+                <Shuffle size={17} />
+                Random
+              </button>
+            </div>
+
+            <div className="filter-grid" aria-label="Score card filters">
+              {SCORE_CARD_TYPES.map((type) => {
+                const checked = draftScoreCardFilters[type];
+                const checkedCount = SCORE_CARD_TYPES.filter((candidate) => draftScoreCardFilters[candidate]).length;
+                return (
+                  <label className="filter-option" key={type}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleDraftScoreCardFilter(type)}
+                      disabled={checked && checkedCount === 1}
+                    />
+                    <span>{getScoreCardTypeLabel(type)}</span>
+                  </label>
+                );
+              })}
+            </div>
+
+            <ScoreCardPreview scoreCard={draftScoreCard} label={`Selected card ${draftScoreCard.id}`} />
+          </section>
+
+          <section className="section-panel card-option-list" aria-label="Score cards">
+            {draftVisibleScoreCards.map((card) => (
+              <button
+                className={card.id === draftScoreCardId ? "score-card-option selected" : "score-card-option"}
+                type="button"
+                key={card.id}
+                onClick={() => selectDraftScoreCard(card.id)}
+                aria-label={`Select card ${card.id}`}
+              >
+                <span className="score-card-option-title">Card #{card.id}</span>
+                <ScoreCardPreview scoreCard={card} label={`Card ${card.id}`} />
+              </button>
+            ))}
+          </section>
         </div>
       ) : null}
 
@@ -2832,6 +3148,7 @@ function App() {
 
             <DiceGrid
               rows={rows}
+              scoreCard={scoreCard}
               roll={turn.roll}
               rollAnimationKey={rollAnimationKey}
               enabled={
@@ -2907,12 +3224,13 @@ function App() {
                 <ScoreRow
                   key={row}
                   row={row}
+                  scoreCard={scoreCard}
                   rows={rows}
                   turn={turn}
                   legalMarkKeys={legalMarkKeys}
                   legalMarkRoles={legalMarkRoles}
                   showHints={showHints && !(mode === "sync" && syncHintsLockedOff)}
-                  canLock={mode === "local" && canStageOpponentLock(row, rows, turn, diceStageDone, gameOver)}
+                  canLock={mode === "local" && canStageOpponentLock(scoreCard, row, rows, turn, diceStageDone, gameOver)}
                   gameOver={gameOver}
                   onSelectMark={selectMark}
                   onStageOpponentLock={stageOpponentLock}
@@ -2965,7 +3283,7 @@ function App() {
               ))}
             </div>
 
-            <ScoreTotals rows={rows} penalties={penalties} turn={turn} totalScore={totalScore} />
+            <ScoreTotals scoreCard={scoreCard} rows={rows} penalties={penalties} turn={turn} totalScore={totalScore} />
           </section>
 
           {mode === "sync" && syncToastMessage ? (
@@ -3350,6 +3668,7 @@ function DiceGrid({
   roll,
   rollAnimationKey,
   rows,
+  scoreCard,
 }: {
   enabled: boolean;
   onRoll: () => void;
@@ -3357,11 +3676,12 @@ function DiceGrid({
   roll: DiceRoll | null;
   rollAnimationKey: number;
   rows: RowsState;
+  scoreCard: ScoreCardPreset;
 }) {
   return (
     <button className={pale ? "dice-grid pale" : "dice-grid"} type="button" onClick={onRoll} disabled={!enabled} aria-label="Roll dice">
       {DICE_LAYOUT.map((die) => {
-        if (isRowColor(die.key) && rows[die.key].lock !== "none") {
+        if (isRowColor(die.key) && !isDieAvailable(die.key, rows, scoreCard)) {
           return null;
         }
 
@@ -3418,6 +3738,25 @@ function Die({
   );
 }
 
+function scoreTileStyle(color: RowColor): CSSProperties {
+  return {
+    "--row-tile-fill": SCORE_COLOR_TILE_FILLS[color],
+    "--row-tile-border": SCORE_COLOR_TILE_FILLS[color],
+  } as CSSProperties;
+}
+
+function scoreRowBackground(scoreCard: ScoreCardPreset, row: RowColor) {
+  const colors = [...getScoreCardRow(scoreCard, row).tiles.map((tile) => tile.color), getScoreCardLockColor(scoreCard, row)];
+  const stops = colors.map((color, index) => {
+    const start = `${(index / colors.length) * 100}%`;
+    const end = `${((index + 1) / colors.length) * 100}%`;
+
+    return `${SCORE_COLOR_BACKGROUNDS[color]} ${start} ${end}`;
+  });
+
+  return `linear-gradient(to right, ${stops.join(", ")})`;
+}
+
 function ScoreRow({
   canLock,
   gameOver,
@@ -3425,8 +3764,10 @@ function ScoreRow({
   legalMarkRoles,
   onSelectMark,
   onStageOpponentLock,
+  preview = false,
   row,
   rows,
+  scoreCard,
   showHints,
   turn,
 }: {
@@ -3436,19 +3777,24 @@ function ScoreRow({
   legalMarkRoles: Map<string, Set<MarkRole>>;
   onSelectMark: (mark: ScoreMark) => void;
   onStageOpponentLock: (row: RowColor) => void;
+  preview?: boolean;
   row: RowColor;
   rows: RowsState;
+  scoreCard: ScoreCardPreset;
   showHints: boolean;
   turn: TurnDraft;
 }) {
-  const config = ROW_CONFIGS[row];
-  const ownLock = rows[row].lock === "own" || hasStagedOwnLock(row, turn);
+  const cardRow = getScoreCardRow(scoreCard, row);
+  const rowLabel = getScoreCardRowLabel(row);
+  const lockColor = getScoreCardLockColor(scoreCard, row);
+  const ownLock = rows[row].lock === "own" || hasStagedOwnLock(scoreCard, row, turn);
   const opponentLock = rows[row].lock === "opponent" || turn.opponentLocks.includes(row);
   const closed = rows[row].lock !== "none";
 
   return (
-    <div className={`score-row ${row} ${closed ? "closed" : ""}`}>
-      {config.numbers.map((number) => {
+    <div className={`score-row ${row} ${closed ? "closed" : ""}`} style={{ background: scoreRowBackground(scoreCard, row) }}>
+      {cardRow.tiles.map((tile) => {
+        const number = tile.number;
         const mark: ScoreMark = { row, number };
         const key = markKey(mark);
         const selected =
@@ -3458,44 +3804,70 @@ function ScoreRow({
         const roles = legalMarkRoles.get(key);
         const whiteHint = showHints && Boolean(roles?.has("white"));
         const mixedHint = showHints && Boolean(roles?.has("mixed"));
-        return (
+        const className = [
+          "score-tile",
+          selected ? "selected" : "",
+          legal ? "legal" : "",
+          whiteHint ? "hint-white" : "",
+          mixedHint ? "hint-mixed" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        const content = <span>{number}</span>;
+
+        return preview ? (
+          <span className={className} key={number} style={scoreTileStyle(tile.color)} aria-hidden="true">
+            {content}
+          </span>
+        ) : (
           <button
-            className={[
-              "score-tile",
-              selected ? "selected" : "",
-              legal ? "legal" : "",
-              whiteHint ? "hint-white" : "",
-              mixedHint ? "hint-mixed" : "",
-            ]
-              .filter(Boolean)
-              .join(" ")}
+            className={className}
             key={number}
             type="button"
             onClick={() => onSelectMark(mark)}
             disabled={!legal || gameOver}
-            aria-label={`${config.label} ${number}`}
+            aria-label={`${rowLabel} ${number}`}
+            style={scoreTileStyle(tile.color)}
           >
-            <span>{number}</span>
+            {content}
           </button>
         );
       })}
 
-      <button
-        className={[
-          "lock-tile",
-          ownLock ? "own" : "",
-          opponentLock ? "opponent" : "",
-          canLock ? "legal" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-        type="button"
-        onClick={() => onStageOpponentLock(row)}
-        disabled={!canLock || gameOver}
-        aria-label={`${config.label} locked`}
-      >
-        <Lock size={17} />
-      </button>
+      {preview ? (
+        <span
+          className={[
+            "lock-tile",
+            ownLock ? "own" : "",
+            opponentLock ? "opponent" : "",
+            canLock ? "legal" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          style={scoreTileStyle(lockColor)}
+          aria-hidden="true"
+        >
+          <Lock size={17} />
+        </span>
+      ) : (
+        <button
+          className={[
+            "lock-tile",
+            ownLock ? "own" : "",
+            opponentLock ? "opponent" : "",
+            canLock ? "legal" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          type="button"
+          onClick={() => onStageOpponentLock(row)}
+          disabled={!canLock || gameOver}
+          aria-label={`${rowLabel} locked`}
+          style={scoreTileStyle(lockColor)}
+        >
+          <Lock size={17} />
+        </button>
+      )}
     </div>
   );
 }
@@ -3503,11 +3875,13 @@ function ScoreRow({
 function ScoreTotals({
   penalties,
   rows,
+  scoreCard,
   totalScore,
   turn,
 }: {
   penalties: number;
   rows: RowsState;
+  scoreCard: ScoreCardPreset;
   totalScore: number;
   turn: TurnDraft;
 }) {
@@ -3516,13 +3890,73 @@ function ScoreTotals({
       {ROW_COLORS.map((row, index) => (
         <span className="total-piece" key={row}>
           {index > 0 ? <span className="operator">+</span> : null}
-          <span className={`total-box ${row}`}>{getColorScore(row, rows, turn)}</span>
+          <span className={`total-box ${row}`}>{getColorScore(row, scoreCard, rows, turn)}</span>
         </span>
       ))}
       <span className="operator">-</span>
       <span className="total-box penalty">{getPenaltyCount(penalties, turn) * PENALTY_POINTS}</span>
       <span className="operator">=</span>
       <strong className="grand-total">{totalScore}</strong>
+    </div>
+  );
+}
+
+function ScoreCardChoice({
+  onEdit,
+  scoreCard,
+}: {
+  onEdit?: () => void;
+  scoreCard: ScoreCardPreset;
+}) {
+  return (
+    <div className="score-card-choice">
+      <div className="score-card-choice-heading">
+        <span>Card #{scoreCard.id}</span>
+        {onEdit ? (
+          <button className="secondary" type="button" onClick={onEdit}>
+            <Pencil size={16} />
+            Edit
+          </button>
+        ) : null}
+      </div>
+      <ScoreCardPreview scoreCard={scoreCard} label={`Card ${scoreCard.id}`} />
+    </div>
+  );
+}
+
+function ScoreCardPreview({
+  label,
+  scoreCard,
+}: {
+  label: string;
+  scoreCard: ScoreCardPreset;
+}) {
+  const emptyRows = createEmptyRows();
+  const emptyTurn = createEmptyTurn();
+  const emptyLegalKeys = new Set<string>();
+  const emptyLegalRoles = new Map<string, Set<MarkRole>>();
+
+  return (
+    <div className="score-card-preview" aria-label={label}>
+      <div className="score-rows">
+        {ROW_COLORS.map((row) => (
+          <ScoreRow
+            key={row}
+            row={row}
+            scoreCard={scoreCard}
+            rows={emptyRows}
+            turn={emptyTurn}
+            legalMarkKeys={emptyLegalKeys}
+            legalMarkRoles={emptyLegalRoles}
+            showHints={false}
+            canLock={false}
+            gameOver
+            preview
+            onSelectMark={() => undefined}
+            onStageOpponentLock={() => undefined}
+          />
+        ))}
+      </div>
     </div>
   );
 }

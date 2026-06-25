@@ -26,14 +26,15 @@ The app should work in an extremely similar way to the sibling `../olvidalo-app/
 - Local-first state using `localStorage`.
 - Compact mobile-first layout.
 - No routing library unless the project later grows enough to require one.
-- Page state managed inside the app, initially only `home` and `play`.
+- Page state managed inside the app.
 
 ## Pages
 
-The app has exactly two main pages:
+The app has three app pages:
 
 1. Home
-2. Play
+2. Score Card Picker
+3. Play
 
 There is no landing page, tutorial page, or marketing content. The first screen is the usable app.
 
@@ -75,14 +76,30 @@ The star control is single-select. Exactly one player can be marked as the user.
 
 ### Local Tab Game Section
 
-For now, the Game section contains only a large Start button.
+The Game section contains:
 
-There are no customizable rules on the Local tab.
+- A compact selected score-card preview.
+- Minimal selected-card text such as `Card #1`.
+- An Edit score card control.
+- A large Start button.
+
+The selected score card is the user's personal persisted score-card choice.
+
+The compact selected score-card preview:
+
+- Shows only the four score-card rows.
+- Does not show penalties, scoring guide, or totals.
+- Reuses the same score-row component and visual styling as the Play page.
+
+The Edit score card control opens the Score Card Picker page.
+
+There are no other customizable rules on the Local tab.
 
 When Start is pressed:
 
 - Trim player names.
 - Save the roster and selected user player.
+- Save the selected score-card id into the active local game.
 - Clear any previous active game.
 - Start on the Play page with the current player set to the first player in the ordered roster.
 
@@ -94,6 +111,17 @@ The Sync tab contains a simple setup flow:
 - Choose Host or Join.
 
 The Sync tab does not show the local player editor with stars, drag handles, or manual roster setup.
+
+Before the user chooses Host or completes joining a host, the Sync tab does not show a score-card preview.
+
+After a sync score card is known:
+
+- The selected score card is visible on the Sync tab.
+- The preview shows only the four score-card rows.
+- The preview uses the same row component and styling as the Play page.
+- The preview text should be minimal, such as `Card #37`.
+- A sync joiner sees the host-selected score card as read-only.
+- The joiner's personal persisted score-card choice is not overwritten by the host-selected sync card.
 
 #### Sync Host Lobby
 
@@ -116,6 +144,9 @@ When the user chooses Host:
 - Before starting, the host can rearrange player order and randomize player order.
 - Host lobby controls should show Randomize on the left and Scan on the right.
 - The host Start button should be full width below the host QR code.
+- The host lobby shows the host's personal persisted selected score card.
+- The host can edit the selected score card before starting.
+- If the host confirms a new score-card selection while players are already joined, joined players update immediately.
 - Only the host can start the synced game.
 
 #### Sync Join Flow
@@ -127,6 +158,9 @@ When the user chooses Join:
 - Because there is no internet signaling server, the joiner must show an answer QR code after scanning the host QR.
 - The host scans the joiner's answer QR code to complete the WebRTC connection.
 - After connection, the joiner appears in the host lobby automatically.
+- After connection, the joiner sees the host's selected score card.
+- The host's selected score card is read-only for the joiner.
+- The host's selected score card is runtime sync-session state for the joiner, not a replacement for the joiner's personal persisted selected card.
 - The joiner waits in the lobby until the host starts the game.
 
 This two-way QR handshake is required for the offline PWA approach. The app should make it feel as lightweight as possible, but it should not pretend that a one-scan offline handshake is reliable.
@@ -169,6 +203,177 @@ QR handshake gating requirements:
 - If the data channel does not open, the joiner should remain on the answer QR screen unless the host ends the session or the user cancels.
 - Failed answer attempts should be recoverable by scanning a fresh host QR and generating a fresh answer QR.
 
+## Preset Score Cards
+
+The app uses pregenerated score-card presets.
+
+Runtime app code does not randomly generate score-card layouts during play. Randomness for score cards happens in a repository script that creates and validates a fixed data file before release.
+
+There are exactly 100 score-card presets:
+
+- Card `#1`: standard score card.
+- Cards `#2-34`: mixed numbers only.
+- Cards `#35-67`: mixed colors only.
+- Cards `#68-100`: mixed numbers and mixed colors.
+
+The fixed ranges are part of the public app behavior. Users can identify a card by number and tell other local players which card to select.
+
+All players in one game use the same score card:
+
+- In local mode, this is social coordination. The app shows the selected card number, but each device is responsible for choosing the same card.
+- In sync mode, the host-selected card is authoritative and sent to every joined player.
+
+### Score Card Preset Data
+
+Score-card preset data should live in one generated JSON file, such as `scoreCards.json`.
+
+The repository should also include a deterministic generator/validator script.
+
+Generation requirements:
+
+- Use a fixed seed.
+- Regenerating with the same seed should produce the same `scoreCards.json`.
+- Validate all 100 cards after generation.
+- Confirm every full score-card layout is unique across the full 100-card set.
+- Keep the generated data checked into the repository.
+- Do not generate cards dynamically in the app.
+
+Each preset should include:
+
+- Numeric id from `1` to `100`.
+- Type: `standard`, `numbers`, `colors`, or `numbersAndColors`.
+- Four rows.
+- Eleven tiles in each row.
+- Each tile's number.
+- Each tile's color.
+
+Row identity and tile color are separate concepts:
+
+- A row is a visual/progression track.
+- A tile color controls scoring and mixed-die eligibility.
+- A tile number controls whether a white sum or mixed sum matches that tile.
+
+### Standard Preset
+
+Card `#1` is the current standard score card:
+
+- Row 1: red, numbers `2-12`.
+- Row 2: yellow, numbers `2-12`.
+- Row 3: green, numbers `12-2`.
+- Row 4: blue, numbers `12-2`.
+
+Each standard row has one color across all tiles and the lock color matches that row color.
+
+### Mixed Number Presets
+
+Cards `#2-34` keep standard row colors but rearrange numbers.
+
+Rules:
+
+- Each row contains each number `2-12` exactly once.
+- Numbers are uniformly sampled without replacement within each row.
+- Generated mixed-number cards must be unique across the 33 mixed-number presets.
+- Generated mixed-number cards must not duplicate any other preset.
+- Because duplicate complete mixed-number cards are unlikely but possible, the generator must still check uniqueness.
+- Row progression uses visual order, not numeric order.
+- The final tile is the last visual tile, whatever number it contains.
+
+### Mixed Color Presets
+
+Cards `#35-67` keep standard number order but rearrange tile colors.
+
+Rules:
+
+- Each row has exactly one contiguous segment of each color.
+- Each row therefore has exactly four color segments.
+- Each color segment length is between 2 and 4 tiles, inclusive.
+- Each row's 11 segment lengths must sum to 11.
+- Each column contains exactly one red tile, one yellow tile, one green tile, and one blue tile.
+- Each generated mixed-color card must satisfy all row-segment and column-balance constraints.
+- Generated mixed-color cards must be unique across the 33 mixed-color presets.
+- Generated mixed-color cards must not duplicate any other preset.
+- The generator should sample uniformly from the legal color arrangements defined by these constraints.
+- The generator should prefer enumerating or backtracking over the legal arrangement space and then sampling with the fixed seed, rather than using an app-runtime rejection shuffle.
+
+The visual effect should look like standard rows were cut into colored segments and stitched together:
+
+- Row bands still use the same shape, thickness, and color treatment as standard rows.
+- Number tiles still use the same shape and tile treatment as standard tiles.
+- Segment boundaries may use simple vertical divider lines between color segments.
+- The row should not become neutral or white just because it contains multiple colors.
+
+### Mixed Number And Mixed Color Presets
+
+Cards `#68-100` combine both variations:
+
+- Each row has numbers `2-12` exactly once in a mixed visual order.
+- Tile colors follow the mixed-color constraints.
+- Generated cards must be unique across the 33 combined presets.
+- Generated combined cards must not duplicate any other preset.
+- Row progression uses visual order.
+- Tile color controls scoring and mixed-die eligibility.
+
+### Score Card Picker Page
+
+The Score Card Picker page is opened from:
+
+- The Local tab's score-card Edit control.
+- The sync host lobby's score-card Edit control.
+
+Sync joiners cannot open the picker for a host-selected card.
+
+The picker uses draft state:
+
+- Opening the picker copies the currently committed selected card id and filter state into draft state.
+- Clicking a card changes only the draft selected card.
+- Pressing Random changes only the draft selected card.
+- Changing filters changes only the draft filter state.
+- Back discards the draft selected card and draft filters.
+- Confirm applies the draft selected card and draft filters.
+- Confirm is enabled even if nothing changed.
+
+Picker filter controls:
+
+- Four checkboxes: Standard, Numbers, Colors, Numbers + Colors.
+- The persisted default is Standard checked and the other three unchecked.
+- At least one checkbox must remain checked.
+- The app must not allow all four filters to be unchecked.
+- Filter state persists only after Confirm.
+- If a draft filter change excludes the draft selected card, the picker automatically selects the first visible card.
+- Because at least one filter remains checked, there is always at least one visible card.
+
+Picker list behavior:
+
+- Show the draft selected card at the top.
+- Show minimal selected-card text such as `Card #37`.
+- Show a Random button near the top.
+- Random selects uniformly from the currently visible draft-filtered cards.
+- After a card is clicked or Random selects a card, scroll to the top so the user can see the draft selected card.
+- Below the top selected-card area, show a vertical scroll list of every card that passes the current draft filters.
+- Each list item shows its card number and a row-only score-card preview.
+- Do not show card type labels on individual card previews; users can infer type from the rows.
+
+Picker previews:
+
+- Show only the four score-card rows.
+- Do not show penalties.
+- Do not show scoring guide.
+- Do not show score totals.
+- Reuse the same score-row component and styling as the Play page.
+
+When Confirm is pressed:
+
+- In Local context, update the personal persisted selected card id and persisted filter state, then return to the Local tab.
+- In Sync host context, update the host's personal persisted selected card id and persisted filter state, broadcast the new card id to joined players, then return to the Sync host lobby.
+- In both contexts, the Home page preview updates to the confirmed card.
+
+When Back is pressed:
+
+- Discard the draft selected card.
+- Discard the draft filter state.
+- Return to the home tab that opened the picker.
+- Leave the committed selected card and committed filter state unchanged.
+
 ## Sync Mode Network Model
 
 Sync mode uses local WebRTC data channels between the host and each joined player.
@@ -178,6 +383,7 @@ The host is authoritative for shared game state:
 - Player list.
 - Player order.
 - Current host identity.
+- Selected score-card id.
 - Current turn player.
 - Current turn id.
 - Dice roll.
@@ -224,6 +430,15 @@ Player-to-host events include:
 - Current-player roll request.
 - Ready payload.
 - Voluntary exit.
+
+Sync score-card requirements:
+
+- Lobby state should include the host-selected score-card id.
+- Game start should include the host-selected score-card id.
+- Host start over should include the host-selected score-card id.
+- When the host confirms a score-card change in the lobby, the host broadcasts the updated lobby state.
+- Joined players should update their read-only sync card preview immediately when the lobby state changes.
+- A joiner should not persist the host-selected score-card id as that joiner's personal score-card choice.
 
 The host should be the source of truth for dice results. When the current player taps the dice in sync mode, that device sends a roll request to the host. The host validates that the request came from the current active player for the current `turnId`, generates the roll for the currently visible dice, and broadcasts the roll result to everyone.
 
@@ -399,12 +614,19 @@ Dice styling:
 - Colored dice have colored faces with white pips.
 - The dice should feel tactile and large enough to tap comfortably.
 
-If a colored row has been closed, its corresponding colored die disappears completely after the closing turn is committed:
+If a row has been closed, the die matching that row's lock color disappears completely after the closing turn is committed:
 
 - In local mode, this happens when Next is pressed.
 - In sync mode, this happens when all active players are Ready and the turn advances automatically.
 
 White dice are never removed.
+
+Because row closure and tile color are separate in mixed-color presets:
+
+- A closed row is disabled for the rest of the game.
+- The removed die color may still appear as tiles on other open rows.
+- Those tiles can still be selected by white sums.
+- Those tiles cannot be selected by mixed sums after the matching colored die has been removed.
 
 In local mode, below the dice are 11 white number boxes labeled 2 through 12.
 
@@ -477,27 +699,46 @@ Synced play player rows should show, from left to right:
 
 The score card should be an app-native, cleaner, more elegant version of the attached physical score card image. It should preserve the same information without feeling crowded.
 
-Rows:
+The Play page uses the selected score-card preset for its rows.
+
+Card `#1` preserves the current standard rows:
 
 - Red row: numbers 2 through 12.
 - Yellow row: numbers 2 through 12.
 - Green row: numbers 12 through 2.
 - Blue row: numbers 12 through 2.
 
-Visual order matters. "To the right" means to the right on screen:
+For every preset, visual order matters. "To the right" means to the right on screen.
+
+In the standard preset:
 
 - Red and yellow progress from 2 to 12.
 - Green and blue progress from 12 to 2.
 
+In mixed-number presets, progression follows the visual tile order, not numeric order.
+
+In mixed-color presets, row identity and tile color are separate:
+
+- A row is still one horizontal progression track.
+- The row may contain multiple color segments.
+- A tile's color determines scoring and mixed-die eligibility.
+- The final tile's color determines the lock color and the die removed if that row closes.
+
 Each row includes:
 
-- Colored row band.
-- Lightly row-tinted number tiles.
+- Colored row band or colored row segments.
+- Lightly color-tinted number tiles.
 - A lock circle after the final number.
 
 Number labels should be centered in their tiles, including double-digit labels.
 
 Selected number tiles should use a clean black X mark.
+
+Compact score-card previews on the Home page and Score Card Picker page:
+
+- Show only the four score-card rows.
+- Use the same row and tile styling as the Play page.
+- Do not show penalties, scoring guide, or totals.
 
 ## Row Progression Rules
 
@@ -508,14 +749,22 @@ Examples:
 - If red has 2, 4, and 7 selected, only red 8, 9, 10, 11, and 12 can be selected.
 - If green has 12, 10, and 8 selected, only green 7, 6, 5, 4, 3, and 2 can be selected.
 
+These examples describe the standard score card. In mixed-number layouts, the same rule applies to the visual positions instead of the numeric sequence.
+
 Closed rows are disabled for the rest of the game.
 
 ## Final Number and Lock Rules
 
-The final number in a row is:
+The final number in a row is the last visual number tile in that row.
+
+In the standard score card, the final number is:
 
 - 12 for red and yellow.
 - 2 for green and blue.
+
+In mixed-number score cards, the final number may be any number `2-12` depending on the row's visual order.
+
+The lock icon has the same color as the final number tile.
 
 The final number cannot be selected unless the user already has at least 5 selected numbers in that same row before selecting the final number. Staged selections earlier in the same turn count for this rule.
 
@@ -523,10 +772,10 @@ If the user selects the final number:
 
 - The final number is marked.
 - The row's lock icon is automatically marked.
-- The lock icon counts as an additional point for that color.
+- The lock icon counts as an additional point for the lock color.
 - The row is staged to close.
 - The row remains visually present until the turn is committed.
-- The corresponding colored die remains visible until the turn is committed.
+- The die matching the lock color remains visible until the turn is committed.
 
 In local mode, if an opponent closes a row:
 
@@ -552,7 +801,10 @@ In sync mode:
 After a turn commits any own, opponent, or synced row closure:
 
 - The row is disabled for the rest of the game.
-- The corresponding colored die disappears for the rest of the game.
+- The die matching that row's lock color disappears for the rest of the game.
+- Closing a row does not close that color on other rows.
+- Tiles of the removed die color can still be selected later by white sums on still-open rows.
+- Tiles of the removed die color cannot be selected later by mixed sums because the matching colored die is gone.
 
 If multiple rows close on one turn, all of them are committed together:
 
@@ -638,9 +890,11 @@ The white-sum selection:
 The mixed-sum selection:
 
 - Uses one white die plus one colored die.
-- Must be selected in the row corresponding to that colored die.
+- Must be selected on a tile whose color matches the colored die.
 - Must obey row progression and final-number rules.
 - Only one mixed-sum selection is allowed per user turn.
+- If a colored die has been removed by a row closure, that die cannot create mixed-sum legal moves.
+- Removed die colors may still appear on open rows, but those tiles are legal only through white sums unless the matching die is still available.
 
 If two numbers are selected:
 
@@ -903,7 +1157,16 @@ When the game is over:
 
 Scoring updates live.
 
-Each color's score is based on the count of selected numbers plus any lock icon earned by the user.
+Each color's score is based on the count of selected tiles of that color plus any lock icon of that color earned by the user.
+
+Scoring is color-based, not row-based:
+
+- A selected red tile counts toward the red total regardless of which row it is in.
+- A selected yellow tile counts toward the yellow total regardless of which row it is in.
+- A selected green tile counts toward the green total regardless of which row it is in.
+- A selected blue tile counts toward the blue total regardless of which row it is in.
+- An owned lock counts toward the color of that row's lock icon.
+- In standard card `#1`, this produces the same totals as the current row-based visual layout because each row has one color.
 
 Opponent lock icons do not count for the user.
 
@@ -951,12 +1214,16 @@ The scoring guide and totals should appear below the rows in a cleaner app-nativ
 Persist locally for all modes:
 
 - Legal options hint preference.
+- Personal selected score-card id.
+- Score Card Picker filter state.
 
 Persist locally for local mode:
 
 - Player roster.
 - Selected user player.
 - Active game state.
+- Active game selected score-card id.
+- Active game score-card layout.
 - Current page.
 - Current player index.
 - Score-card marks.
@@ -972,11 +1239,14 @@ Persist locally for local mode:
 Persist locally for sync mode:
 
 - The player's own display name.
+- The host player's personal selected score-card id when that device is hosting.
 - The current sync screen state where practical.
 - The local player's private score-card marks.
 - The local player's private penalties.
 - The local player's score totals.
 - The local player's unready current-turn undo history.
+
+Do not persist a joined host's selected score-card id as the joiner's personal selected score-card id.
 
 Do not rely on local persistence to recover a live sync session:
 
@@ -991,6 +1261,8 @@ Suggested storage keys:
 - `qwixx.players.v1`
 - `qwixx.selectedPlayer.v1`
 - `qwixx.showHints.v1`
+- `qwixx.selectedScoreCard.v1`
+- `qwixx.scoreCardFilters.v1`
 - `qwixx.activeGame.v1`
 - `qwixx.syncName.v1`
 
@@ -1001,6 +1273,245 @@ Local Exit clears the active game state but keeps roster and selected user playe
 Local Start over replaces the active game state with a fresh game using the current game players and selected user player.
 
 Sync Exit clears the local sync session state. Host Start over replaces the synced game state with a fresh game using the current connected players and order.
+
+## Preset Score Card Implementation Plan
+
+The preset score-card feature should be implemented in stages. The goal is to replace row-color assumptions with a small layout model, not to layer preset exceptions on top of the current standard-card code.
+
+### Step 1: Data Model And Generated Presets
+
+Create the score-card data model first.
+
+Recommended types:
+
+- `ScoreCardPreset`.
+- `ScoreCardType`.
+- `ScoreCardRow`.
+- `ScoreCardTile`.
+- `ScoreCardFilters`.
+
+The model should represent:
+
+- Preset id.
+- Preset type.
+- Four rows.
+- Eleven tiles per row.
+- Tile number.
+- Tile color.
+
+Use this model for the standard card too. Standard Qwixx should be data, not a special rendering path.
+
+Create a deterministic generation script:
+
+- Use a fixed seed.
+- Generate card `#1` directly as the standard card.
+- Generate 33 mixed-number cards.
+- Generate 33 mixed-color cards.
+- Generate 33 mixed-number-and-color cards.
+- Reject duplicate full card layouts within each generated category and across the full 100-card set.
+- For mixed-color layouts, sample from legal arrangements only after row-segment and column-balance constraints are satisfied.
+- Prefer an offline enumeration/backtracking generator that can prove every generated card is legal before writing JSON.
+- Write one checked-in JSON file containing all 100 presets.
+
+Create a validator script or validator module:
+
+- Confirm there are exactly 100 cards.
+- Confirm ids are exactly `1-100`.
+- Confirm ids and type ranges match the required fixed ranges.
+- Confirm each row has exactly 11 tiles.
+- Confirm each row has numbers `2-12` exactly once.
+- Confirm every tile color is one of red, yellow, green, blue.
+- For mixed-color and combined cards, confirm each row has exactly one contiguous segment per color.
+- For mixed-color and combined cards, confirm every segment length is 2-4.
+- For mixed-color and combined cards, confirm every column contains exactly one tile of each color.
+- Confirm generated category uniqueness.
+- Confirm global full-layout uniqueness across all 100 cards.
+
+### Step 2: Render Through The Layout Model
+
+Refactor score-card rendering to read from `ScoreCardPreset`.
+
+Keep the visible standard card unchanged when preset `#1` is selected.
+
+Do not change gameplay rules in this step except where necessary to render from layout data.
+
+Rendering requirements:
+
+- Rows and tiles come from the selected preset.
+- Tile labels come from `tile.number`.
+- Tile colors come from `tile.color`.
+- Lock color comes from the final tile's color.
+- Row backgrounds support color segments.
+- Segment boundaries use simple vertical divider lines when a row color changes.
+- Compact previews and full Play page rows reuse the same row component.
+- Compact previews render rows only.
+- Full Play page renders rows plus penalties, scoring guide, and totals.
+
+### Step 3: Persist And Select The Personal Card
+
+Add personal selected-card state:
+
+- Read from `qwixx.selectedScoreCard.v1`.
+- Default to card `#1`.
+- Validate saved ids against the preset data.
+- Fall back to card `#1` if saved data is missing or invalid.
+
+Add persisted picker filter state:
+
+- Read from `qwixx.scoreCardFilters.v1`.
+- Default to Standard checked and all other filters unchecked.
+- Validate saved filter state.
+- Fall back to the default if saved data is missing, invalid, or has no checked filters.
+- The committed selected card should always match the committed filters.
+- If loaded persisted filters exclude the loaded selected card, choose the first card visible under the loaded filters.
+
+Show the selected-card preview on:
+
+- Local tab.
+- Sync host lobby.
+- Sync joiner lobby only after joining and receiving the host card.
+
+Do not show a card preview on the initial Sync tab before hosting or joining.
+
+### Step 4: Build The Score Card Picker Page
+
+Add the Score Card Picker page with draft state.
+
+Implementation requirements:
+
+- Opening the picker records the return tab/context.
+- Opening the picker copies committed selected card id and committed filters into draft state.
+- Back discards draft state.
+- Confirm commits draft state.
+- Random selects from currently visible draft-filtered cards.
+- Card click selects that draft card.
+- Card click and Random scroll to the top selected-card area.
+- Filter changes update draft filters only.
+- Unchecking the final checked filter is not allowed.
+- If a filter change excludes the draft selected card, choose the first visible card.
+
+Keep the picker UI simple:
+
+- Top action row with Back and Confirm.
+- Four checkboxes.
+- Draft selected card preview.
+- Random button.
+- Vertical scroll list of visible cards.
+- Card number text only, such as `Card #37`.
+- No card type text labels on list items.
+
+### Step 5: Update Rule Helpers For Layout-Aware Play
+
+Replace row-color assumptions with layout lookups.
+
+Rules helpers should answer these questions from the selected layout:
+
+- What number is at row/index?
+- What color is at row/index?
+- What visual index contains a row/number selection?
+- What is the final tile for this row?
+- What is the lock color for this row?
+- Which die color is removed when this row closes?
+
+Selection changes:
+
+- White-sum legal moves match tile number on any open row.
+- Mixed-sum legal moves match tile number and tile color.
+- A removed colored die creates no mixed-sum legal moves for that color.
+- Row progression continues to use visual row index.
+- Same-row white-before-mixed logic continues to use visual row index.
+- The final tile rule uses the last visual tile, not a hard-coded number.
+
+Closure changes:
+
+- Store closed rows as row ids or row indexes.
+- Derive removed dice from the lock colors of closed rows.
+- Closing a row disables only that row.
+- Closing a row does not disable that color elsewhere.
+
+Scoring changes:
+
+- Count selected tiles by tile color.
+- Count owned locks by lock color.
+- Do not count opponent/shared locks for the local score.
+- Preserve the existing scoring guide.
+
+### Step 6: Wire Local Mode
+
+Local game start should save the selected score-card id into the active game.
+
+Local active-game persistence should restore:
+
+- Score-card id.
+- Score-card layout.
+- Row marks using row/index or another layout-stable representation.
+- Row closures.
+- Removed dice derived from closed rows and lock colors.
+
+Local Start over should keep:
+
+- Same players.
+- Same selected user player.
+- Same selected score-card id.
+
+Local Exit should keep:
+
+- Personal selected-card id.
+- Persisted picker filters.
+
+### Step 7: Wire Sync Mode
+
+Sync host behavior:
+
+- Host lobby uses the host's personal selected-card id.
+- Host can open picker before game start.
+- Confirming picker changes broadcasts updated lobby state.
+- Host game start includes selected score-card id.
+- Host Start over includes selected score-card id.
+
+Sync joiner behavior:
+
+- Initial Sync tab shows no card before joining.
+- After joining, lobby state sets runtime sync score-card id.
+- Joiner displays that card read-only.
+- Joiner does not persist that id as personal selected-card id.
+- Game start uses the host-selected id.
+
+Sync play behavior:
+
+- Everyone uses the same host-selected score-card layout.
+- Ready payloads continue to send shared consequences, not full private score cards.
+- Row closure payloads identify closed rows, not closed colors.
+- Advance result applies closed rows and derives removed dice from those rows' lock colors.
+
+### Step 8: Verification
+
+Add validation tests for preset data:
+
+- Run the preset validator in `npm run verify:ui` or a separate script called by the verifier.
+- Fail if any card violates the fixed ranges, number uniqueness, color segment constraints, column color constraints, category uniqueness, or global uniqueness requirements.
+
+Add UI checks:
+
+- Home Local tab shows card `#1` by default.
+- Initial Sync tab before hosting/joining shows no card preview.
+- Sync host lobby shows the host selected card and Edit control.
+- Sync joiner lobby shows host selected card read-only after joining.
+- Picker cannot uncheck all filters.
+- Picker Back discards draft card and filters.
+- Picker Confirm persists draft card and filters.
+- Picker Random selects only from visible filtered cards.
+- Filter changes that exclude the selected draft card auto-select the first visible card.
+
+Add play-rule checks:
+
+- Standard card behavior remains unchanged.
+- Mixed-number progression uses visual order.
+- Mixed-color white sums can select any matching number regardless of tile color.
+- Mixed-color mixed sums can select only matching tile colors.
+- Closing a row removes the die matching the final tile color.
+- Closed-row die removal does not disable same-color tiles on other open rows for white sums.
+- Scoring counts by tile color, not row.
 
 ## Hardening And Simplification Pass
 
@@ -1234,10 +1745,11 @@ Dice:
 Score card:
 
 - App-native and elegant, not a literal copy of the photo.
-- Colored row bands with lightly row-tinted number tiles.
-- Normal number tiles should be clearly lighter than the row band but tinted enough that pure white legal hints stand out.
+- Colored row bands or colored row segments with lightly color-tinted number tiles.
+- Normal number tiles should be clearly lighter than their surrounding row band or segment but tinted enough that pure white legal hints stand out.
 - Normal number tiles should have crisp edges without a separate pale or white border between the tile and row background.
-- Color total boxes should use the same row-tinted fills as the score row number tiles.
+- Color total boxes should use the same color-tinted fills as matching score-card number tiles.
+- Mixed-color rows should look like standard colored rows cut into valid color segments, not like neutral rows with colored labels.
 - Bold black X for selected marks.
 - Lock circles should be visually clear but compact.
 - The score card should remain readable on mobile without feeling cramped.
@@ -1256,7 +1768,17 @@ Layout:
 Before considering an implementation complete:
 
 - Run the production build.
+- Run the preset score-card validator.
+- Verify preset data contains exactly 100 cards with fixed category ranges.
+- Verify mixed-number, mixed-color, and combined presets satisfy all generation constraints.
 - Verify the Home tabs work and Local mode preserves the agreed player controls.
+- Verify Local home shows the personal selected score card and allows editing it.
+- Verify initial Sync setup shows no score card before hosting or joining.
+- Verify Sync host lobby shows and can edit the host selected score card before start.
+- Verify Sync joiner lobby shows the host selected score card read-only after joining.
+- Verify the Score Card Picker draft Back/Confirm behavior.
+- Verify picker filters persist only after Confirm and cannot all be unchecked.
+- Verify picker Random selects from the current visible filtered cards.
 - Verify the Sync tab can enter a name, choose Host, choose Join, and move through the QR handshake UI.
 - Verify the host lobby adds joined players, defaults to host first then join order, and lets the host rearrange and randomize before starting.
 - Verify the Play page at mobile and desktop widths in both local and sync mode.
@@ -1281,6 +1803,10 @@ Before considering an implementation complete:
 - Verify unexpected host disconnect ends the synced session for everyone.
 - Verify local row closing, staged locks, die removal after Next, and multiple row closures.
 - Verify sync row closing, shared row closure reveal on automatic advance, die removal after automatic advance, and multiple row closures.
+- Verify mixed-number card progression uses visual order.
+- Verify mixed-color card selection uses tile color for mixed sums.
+- Verify mixed-color card scoring counts tile colors rather than row identity.
+- Verify closing a mixed-color row removes the final tile/lock color die but leaves same-color tiles on other open rows selectable by white sums.
 - Verify scoring, penalties, and game-over conditions in both modes.
 - Verify local reload persistence.
 - Verify sync reload or disconnect behavior matches the no-late-reconnect v1 rule.

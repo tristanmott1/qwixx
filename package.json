@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build && node scripts/build-sw.mjs",
+    "generate:cards": "node scripts/score-cards/generate-score-cards.mjs",
     "preview": "vite preview --host 0.0.0.0",
+    "verify:cards": "node scripts/score-cards/validate-score-cards.mjs",
     "verify:ui": "node scripts/verify-ui.mjs"
   },
   "dependencies": {
