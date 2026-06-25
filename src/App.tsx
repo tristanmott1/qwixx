@@ -3016,7 +3016,6 @@ function App() {
 
               {syncRole === "host" && syncPhase === "hostLobby" ? (
                 <>
-                  <ScoreCardChoice scoreCard={personalScoreCard} onEdit={() => openScoreCardPicker("syncHost")} />
                   <SyncLobby
                     isHost
                     players={gamePlayers}
@@ -3054,6 +3053,7 @@ function App() {
               {syncRole === "host" && syncPhase === "hostLobby" ? (
                 <>
                   {syncQrText ? <QrPanel label="Host QR" text={syncQrText} /> : null}
+                  <ScoreCardChoice scoreCard={personalScoreCard} onEdit={() => openScoreCardPicker("syncHost")} />
                   <button
                     className="primary wide-button start-button"
                     type="button"
