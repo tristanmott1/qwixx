@@ -81,6 +81,7 @@ async function launchBrowser() {
 
 async function runSourceChecks() {
   const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const styleSource = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
   const transportSource = await readFile(new URL("../src/syncTransport.ts", import.meta.url), "utf8");
   const removedRefs = [
     "rowsRef",
@@ -110,6 +111,11 @@ async function runSourceChecks() {
   assert(appSource.includes("QR found"), "Scanner and handshake UI show a QR-found state.");
   assert(transportSource.includes('COMPACT_OFFER_PREFIX = "QWO:"'), "Host QR uses the compact offer prefix.");
   assert(transportSource.includes('COMPACT_ANSWER_PREFIX = "QWA:"'), "Answer QR uses the compact answer prefix.");
+  assert(!appSource.includes("sync-play-strip"), "Sync play has no duplicate Ready-count strip.");
+  assert(!styleSource.includes(".sync-play-strip"), "Duplicate Ready-count strip styles are removed.");
+  assert(appSource.includes("CircleDashed"), "Compact sync rows include a waiting icon.");
+  assert(appSource.includes("sync-player-status ready"), "Compact sync rows include a ready status.");
+  assert(appSource.includes("sync-player-status waiting"), "Compact sync rows include a waiting status.");
 }
 
 function rowsState() {
@@ -322,8 +328,24 @@ async function runSyncHostChecks(page) {
 
   assert((await page.getByText("Alice").count()) > 0, "Host appears in sync lobby.");
   assert((await page.locator(".qr-panel .qr-code").count()) === 1, "Host QR is generated.");
+  assert(
+    JSON.stringify(await page.locator(".sync-control-row button").allTextContents()) === JSON.stringify(["Randomize", "Scan"]),
+    "Host lobby controls show Randomize before Scan.",
+  );
+  assert(
+    await page.evaluate(() => {
+      const qrPanel = document.querySelector(".qr-panel");
+      const startButton = [...document.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Start");
+
+      return Boolean(qrPanel && startButton && (qrPanel.compareDocumentPosition(startButton) & Node.DOCUMENT_POSITION_FOLLOWING));
+    }),
+    "Host Start button appears below the host QR.",
+  );
   await page.getByRole("button", { name: "Start" }).click();
   assert((await page.locator(".sum-strip").count()) === 0, "Sync play does not show manual white-sum boxes.");
+  assert((await page.locator(".sync-play-strip").count()) === 0, "Sync play does not show a duplicate Ready-count strip.");
+  assert((await page.locator(".sync-player-status.waiting").count()) === 1, "Sync compact player row shows waiting status.");
+  assert((await page.locator(".sync-player-status.ready").count()) === 0, "Sync compact player row starts unready.");
   assert((await page.getByRole("button", { name: "Opponent reached four penalties" }).count()) === 0, "Sync play hides opponent 4x control.");
   assert(await page.getByRole("button", { name: "Ready" }).isDisabled(), "Sync Ready starts disabled before rolling.");
 

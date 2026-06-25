@@ -106,6 +106,8 @@ When the user chooses Host:
 - Joined players are added automatically using the name they entered on their own device.
 - The default order is host first, followed by join order.
 - Before starting, the host can rearrange player order and randomize player order.
+- Host lobby controls should show Randomize on the left and Scan on the right.
+- The host Start button should be full width below the host QR code.
 - Only the host can start the synced game.
 
 #### Sync Join Flow
@@ -398,7 +400,17 @@ In sync mode:
 
 - During `turn`, the primary turn action is Ready.
 - After Ready is pressed, the player's score-card controls and Undo are disabled until the next turn.
-- The host can see which players are Ready.
+- The synced play player list shows each player's Ready state.
+- There is no separate Ready-count strip.
+
+Synced play player rows should show, from left to right:
+
+- Waiting icon if the player is not Ready, or Ready icon if the player is Ready.
+- Player name.
+- Host crown immediately after the host player's name.
+- Star if this is the local user's own row.
+- Remove icon if the host is viewing another player.
+- Nothing at the end if a non-host is viewing another player.
 
 ## Score Card Layout
 
@@ -688,7 +700,6 @@ The Ready payload does not include the player's full private score card.
 When all active players are Ready:
 
 - No player can edit the completed turn.
-- The host can see who is Ready.
 - All Ready payloads for the current `turnId` are applied together.
 - Each device finalizes its own locked pending result for the current turn.
 - Newly closed rows are revealed and globally closed for everyone.

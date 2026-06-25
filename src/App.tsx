@@ -2,8 +2,7 @@ import {
   AlertTriangle,
   ArrowRight,
   Check,
-  ChevronDown,
-  ChevronUp,
+  CircleDashed,
   Crown,
   Eye,
   EyeOff,
@@ -16,9 +15,6 @@ import {
   Star,
   Trash2,
   Undo2,
-  UserMinus,
-  UserPlus,
-  Users,
   Wifi,
   X,
 } from "lucide-react";
@@ -2484,9 +2480,9 @@ function App() {
                   isHost
                   players={gamePlayers}
                   localPlayerId={selectedPlayerId}
+                  hostPlayerId={syncHostPlayerId}
                   readyPlayerIds={[]}
                   syncMessage={syncMessage}
-                  onCreateOffer={createHostOffer}
                   onRandomize={() => {
                     const nextPlayers = shufflePlayers(latestRef.current.gamePlayers);
 
@@ -2509,12 +2505,16 @@ function App() {
                   }}
                   onRemove={removeSyncPlayer}
                   onScanAnswer={() => setSyncCameraMode("answer")}
-                  onStart={startSyncGame}
                 />
               ) : null}
 
-              {syncRole === "host" && syncPhase === "hostLobby" && syncQrText ? (
-                <QrPanel label="Host QR" text={syncQrText} />
+              {syncRole === "host" && syncPhase === "hostLobby" ? (
+                <>
+                  {syncQrText ? <QrPanel label="Host QR" text={syncQrText} /> : null}
+                  <button className="primary wide-button start-button" type="button" onClick={startSyncGame} disabled={gamePlayers.length === 0}>
+                    Start
+                  </button>
+                </>
               ) : null}
 
               {syncRole === "joiner" && (syncPhase === "showAnswer" || syncPhase === "lobby") ? (
@@ -2524,6 +2524,7 @@ function App() {
                     isHost={false}
                     players={gamePlayers}
                     localPlayerId={selectedPlayerId}
+                    hostPlayerId={syncHostPlayerId}
                     readyPlayerIds={[]}
                     syncMessage={syncMessage}
                   />
@@ -2564,15 +2565,6 @@ function App() {
               <h1>{currentPlayer.name}</h1>
               {isUserTurn ? <Star size={18} fill="currentColor" aria-label="Your turn" /> : null}
             </div>
-
-            {mode === "sync" ? (
-              <div className="sync-play-strip">
-                <span>{isLocalReady ? "Done" : "Sync"}</span>
-                <span>
-                  {readyPlayerIds.length}/{gamePlayers.length}
-                </span>
-              </div>
-            ) : null}
 
             <DiceGrid
               rows={rows}
@@ -2638,6 +2630,7 @@ function App() {
               isHost={isHost}
               players={gamePlayers}
               localPlayerId={selectedPlayerId}
+              hostPlayerId={syncHostPlayerId}
               readyPlayerIds={readyPlayerIds}
               syncMessage={syncMessage}
               onRemove={isHost ? removeSyncPlayer : undefined}
@@ -2725,88 +2718,141 @@ function App() {
 
 function SyncLobby({
   compact = false,
+  hostPlayerId,
   isHost,
   localPlayerId,
-  onCreateOffer,
   onMove,
   onRandomize,
   onRemove,
   onScanAnswer,
-  onStart,
   players,
   readyPlayerIds,
   syncMessage,
 }: {
   compact?: boolean;
+  hostPlayerId: string | null;
   isHost: boolean;
   localPlayerId: string | null;
-  onCreateOffer?: () => void;
   onMove?: (fromIndex: number, toIndex: number) => void;
   onRandomize?: () => void;
   onRemove?: (playerId: string) => void;
   onScanAnswer?: () => void;
-  onStart?: () => void;
   players: Player[];
   readyPlayerIds: string[];
   syncMessage: string;
 }) {
+  const [draggingSyncPlayerId, setDraggingSyncPlayerId] = useState<string | null>(null);
+  const canDrag = isHost && !compact && Boolean(onMove);
+
+  useEffect(() => {
+    if (!draggingSyncPlayerId || !canDrag || !onMove) {
+      return undefined;
+    }
+
+    const activeDraggingPlayerId = draggingSyncPlayerId;
+    const movePlayer = onMove;
+
+    function handlePointerMove(event: PointerEvent) {
+      const row = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-sync-player-id]");
+      const overPlayerId = row?.dataset.syncPlayerId;
+
+      if (!overPlayerId || overPlayerId === activeDraggingPlayerId) {
+        return;
+      }
+
+      const fromIndex = players.findIndex((player) => player.id === activeDraggingPlayerId);
+      const toIndex = players.findIndex((player) => player.id === overPlayerId);
+
+      if (fromIndex >= 0 && toIndex >= 0 && fromIndex !== toIndex) {
+        movePlayer(fromIndex, toIndex);
+      }
+    }
+
+    function handlePointerUp() {
+      setDraggingSyncPlayerId(null);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+    };
+  }, [canDrag, draggingSyncPlayerId, onMove, players]);
+
+  function beginSyncDrag(event: ReactPointerEvent<HTMLButtonElement>, playerId: string) {
+    if (!canDrag) {
+      return;
+    }
+
+    event.preventDefault();
+    setDraggingSyncPlayerId(playerId);
+  }
+
   return (
     <div className={compact ? "sync-lobby compact" : "sync-lobby"}>
       <div className="sync-lobby-list">
-        {players.map((player, index) => (
-          <div className="sync-player-row" key={player.id}>
-            <span className="sync-player-icon">
-              {index === 0 ? <Crown size={16} /> : readyPlayerIds.includes(player.id) ? <Check size={16} /> : <Users size={16} />}
-            </span>
-            <span>{player.name}</span>
-            {player.id === localPlayerId ? <Star size={15} fill="currentColor" /> : null}
-            {isHost && !compact && onMove ? (
-              <span className="sync-move-buttons">
+        {players.map((player) => {
+          const isReady = readyPlayerIds.includes(player.id);
+          const isLocalPlayer = player.id === localPlayerId;
+
+          return (
+            <div
+              className={[
+                "sync-player-row",
+                compact ? "compact-row" : "",
+                canDrag ? "host-tools" : "",
+                draggingSyncPlayerId === player.id ? "dragging" : "",
+              ].filter(Boolean).join(" ")}
+              data-sync-player-id={player.id}
+              key={player.id}
+            >
+              {compact ? (
+                <span className={isReady ? "sync-player-status ready" : "sync-player-status waiting"} aria-label={isReady ? "Ready" : "Waiting"}>
+                  {isReady ? <Check size={17} /> : <CircleDashed size={17} />}
+                </span>
+              ) : null}
+              {canDrag ? (
                 <button
-                  className="icon-button"
+                  className="drag-handle"
                   type="button"
-                  onClick={() => onMove(index, index - 1)}
-                  disabled={index === 0}
-                  aria-label={`Move ${player.name} up`}
+                  onPointerDown={(event) => beginSyncDrag(event, player.id)}
+                  aria-label={`Move ${player.name}`}
                 >
-                  <ChevronUp size={14} />
+                  <GripVertical size={18} />
                 </button>
-                <button
-                  className="icon-button"
-                  type="button"
-                  onClick={() => onMove(index, index + 1)}
-                  disabled={index === players.length - 1}
-                  aria-label={`Move ${player.name} down`}
-                >
-                  <ChevronDown size={14} />
-                </button>
+              ) : null}
+              <span className="sync-player-name">
+                <span>{player.name}</span>
+                {player.id === hostPlayerId ? <Crown className="sync-player-crown" size={16} aria-label="Host" /> : null}
               </span>
-            ) : null}
-            {isHost && onRemove && player.id !== localPlayerId ? (
-              <button className="icon-button danger" type="button" onClick={() => onRemove(player.id)} aria-label={`Remove ${player.name}`}>
-                <UserMinus size={15} />
-              </button>
-            ) : null}
-          </div>
-        ))}
+              {isLocalPlayer ? (
+                <span className="icon-button star selected sync-static-icon" aria-label="You">
+                  <Star size={17} fill="currentColor" />
+                </span>
+              ) : null}
+              {isHost && onRemove && !isLocalPlayer ? (
+                <button className="icon-button danger" type="button" onClick={() => onRemove(player.id)} aria-label={`Remove ${player.name}`}>
+                  <Trash2 size={16} />
+                </button>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
 
       {isHost && !compact ? (
         <div className="sync-control-row">
-          <button className="secondary" type="button" onClick={onCreateOffer}>
-            <UserPlus size={18} />
-            Add
-          </button>
-          <button className="secondary" type="button" onClick={onScanAnswer}>
-            <ScanLine size={18} />
-            Scan
-          </button>
           <button className="secondary" type="button" onClick={onRandomize} disabled={players.length < 2}>
             <Shuffle size={18} />
             Randomize
           </button>
-          <button className="primary" type="button" onClick={onStart} disabled={players.length === 0}>
-            Start
+          <button className="secondary" type="button" onClick={onScanAnswer}>
+            <ScanLine size={18} />
+            Scan
           </button>
         </div>
       ) : null}
