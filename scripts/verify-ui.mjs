@@ -269,6 +269,76 @@ async function runGameOverUndoChecks(page) {
   assert((await page.locator(".penalty-box.selected").count()) === 4, "Undo restores the staged fourth penalty.");
 }
 
+async function runSyncHostChecks(page) {
+  await page.goto(baseUrl);
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+
+  await page.getByRole("button", { name: "Sync" }).click();
+  await page.getByLabel("Your name").fill("Alice");
+  await page.getByRole("button", { name: "Host" }).click();
+  await page.waitForSelector(".qr-panel img", { timeout: 5000 });
+  await page.screenshot({ path: outputPath("sync-host-lobby-mobile.png"), fullPage: true });
+
+  assert((await page.getByText("Alice").count()) > 0, "Host appears in sync lobby.");
+  assert((await page.locator(".qr-panel img").count()) === 1, "Host QR is generated.");
+  await page.getByRole("button", { name: "Start" }).click();
+  assert((await page.locator(".sum-strip").count()) === 0, "Sync play does not show manual white-sum boxes.");
+  assert((await page.getByRole("button", { name: "Opponent reached four penalties" }).count()) === 0, "Sync play hides opponent 4x control.");
+  assert(await page.getByRole("button", { name: "Ready" }).isDisabled(), "Sync Ready starts disabled before rolling.");
+
+  await page.getByRole("button", { name: "Roll dice" }).click();
+  assert(await page.getByRole("button", { name: "Ready" }).isDisabled(), "Sync Ready stays disabled until a mark or penalty.");
+  await page.locator("button.score-tile.legal").first().click();
+  assert(!(await page.getByRole("button", { name: "Ready" }).isDisabled()), "Sync Ready enables after a valid mark.");
+  await page.getByRole("button", { name: "Ready" }).click();
+  assert(await page.getByRole("button", { name: "Undo" }).isDisabled(), "Sync Ready disables Undo.");
+  assert(!(await page.getByRole("button", { name: "Advance" }).isDisabled()), "Single-player sync host can advance after Ready.");
+  await page.getByRole("button", { name: "Advance" }).click();
+  assert((await page.getByRole("button", { name: "Ready" }).count()) === 1, "Sync returns to the next turn after Advance.");
+  await page.screenshot({ path: outputPath("sync-play-after-advance-mobile.png"), fullPage: true });
+}
+
+async function runSyncTransportChecks(browser) {
+  const hostPage = await browser.newPage();
+  const joinPage = await browser.newPage();
+
+  await hostPage.goto(baseUrl);
+  await joinPage.goto(baseUrl);
+
+  const offer = await hostPage.evaluate(async () => {
+    const { SyncHostTransport } = await import("/src/syncTransport.ts");
+    window.__messages = [];
+    window.__host = new SyncHostTransport({
+      callbacks: {
+        onMessage: (_playerId, message) => window.__messages.push(message),
+      },
+      hostName: "Alice",
+      hostPlayerId: "alice",
+      roomId: "room",
+    });
+    return window.__host.createOffer();
+  });
+
+  const answer = await joinPage.evaluate(async (offerText) => {
+    const { SyncJoinTransport } = await import("/src/syncTransport.ts");
+    window.__join = new SyncJoinTransport({
+      onMessage: () => {},
+    });
+    const result = await window.__join.createAnswer(offerText, { id: "bob", name: "Bob" });
+    return result.answerText;
+  }, offer);
+
+  await hostPage.evaluate((answerText) => window.__host.acceptAnswer(answerText), answer);
+  await hostPage.waitForFunction(() => window.__messages?.some((message) => message.type === "join"), null, { timeout: 5000 });
+
+  await joinPage.evaluate(() => window.__join.send({ type: "ready", payload: { turnId: "t1", playerId: "bob" } }));
+  await hostPage.waitForFunction(() => window.__messages?.some((message) => message.type === "ready"), null, { timeout: 5000 });
+
+  await hostPage.close();
+  await joinPage.close();
+}
+
 async function main() {
   await mkdir(outputDir, { recursive: true });
 
@@ -292,6 +362,8 @@ async function main() {
     await runAmbiguityChecks(mobile);
     await runCommittedUndoChecks(mobile);
     await runGameOverUndoChecks(mobile);
+    await runSyncHostChecks(mobile);
+    await runSyncTransportChecks(browser);
 
     const desktop = await browser.newPage({ deviceScaleFactor: 1, viewport: { width: 900, height: 900 } });
     await setGame(desktop, activeGameForRoll({ whiteA: 3, whiteB: 4, red: 4, yellow: 2, green: 6, blue: 1 }));
