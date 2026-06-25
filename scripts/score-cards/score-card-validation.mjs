@@ -115,6 +115,7 @@ function validateCard(card, index, ids, signatures, signaturesByType, errors) {
   }
 
   rows.forEach((row, rowIndex) => validateRow(card, row, rowIndex, errors));
+  validateColorNumberCompleteness(card, errors);
 
   if (type === "standard") {
     validateStandardCard(card, errors);
@@ -208,6 +209,26 @@ function validateStandardColors(card, errors) {
   card.rows.forEach((row) => {
     if (row.tiles.some((tile) => tile.color !== row.id)) {
       errors.push(`Card #${card.id} row ${row.id} must use standard row color.`);
+    }
+  });
+}
+
+function validateColorNumberCompleteness(card, errors) {
+  CARD_COLORS.forEach((color) => {
+    const numbers = [];
+
+    card.rows.forEach((row) => {
+      row.tiles.forEach((tile) => {
+        if (tile?.color === color) {
+          numbers.push(tile.number);
+        }
+      });
+    });
+
+    const sortedNumbers = [...numbers].sort((left, right) => left - right);
+
+    if (JSON.stringify(sortedNumbers) !== JSON.stringify(CARD_NUMBERS)) {
+      errors.push(`Card #${card.id} color ${color} must contain numbers 2-12 once.`);
     }
   });
 }

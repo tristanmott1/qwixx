@@ -86,6 +86,8 @@ async function runSourceChecks() {
   const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
   const styleSource = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
   const transportSource = await readFile(new URL("../src/syncTransport.ts", import.meta.url), "utf8");
+  const generatorSource = await readFile(new URL("./score-cards/generate-score-cards.mjs", import.meta.url), "utf8");
+  const validatorSource = await readFile(new URL("./score-cards/score-card-validation.mjs", import.meta.url), "utf8");
   const scoreCards = JSON.parse(await readFile(new URL("../src/data/scoreCards.json", import.meta.url), "utf8"));
   const scoreCardErrors = validateScoreCards(scoreCards);
   const removedRefs = [
@@ -107,6 +109,9 @@ async function runSourceChecks() {
 
   assert(scoreCardErrors.length === 0, `Score-card presets are invalid:\n${scoreCardErrors.join("\n")}`);
   assert(scoreCards.length === 100, "Exactly 100 score-card presets are available.");
+  assert(validatorSource.includes("validateColorNumberCompleteness"), "Score-card validation enforces color-number completeness.");
+  assert(generatorSource.includes("solveNumbersForColorGrid"), "Combined score-card generation solves numbers against color grids.");
+  assert(!generatorSource.includes("createNumbersAndColorsCard(id, colorGrid)"), "Combined score-card generation no longer shuffles numbers independently.");
   assert(appSource.includes("page === \"picker\""), "Score-card picker is a real app page.");
   assert(appSource.includes("openScoreCardPicker"), "Home score-card previews can open the picker.");
   assert(appSource.includes("score-row-backdrop"), "Score-card rows render a grid-aligned segmented backdrop.");

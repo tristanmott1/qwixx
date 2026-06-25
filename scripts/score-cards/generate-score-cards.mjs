@@ -11,7 +11,7 @@ import {
 } from "./score-card-validation.mjs";
 
 const outputPath = fileURLToPath(new URL("../../src/data/scoreCards.json", import.meta.url));
-const rng = createRng("qwixx-score-cards-v1");
+const rng = createRng("qwixx-score-cards-v2-color-number-complete");
 
 function createRng(seed) {
   let hash = 2166136261;
@@ -44,6 +44,10 @@ function shuffle(items) {
 
 function shuffledNumbers() {
   return shuffle(CARD_NUMBERS);
+}
+
+function numbersMatchExpected(numbers) {
+  return JSON.stringify([...numbers].sort((left, right) => left - right)) === JSON.stringify(CARD_NUMBERS);
 }
 
 function createRows(numbersByRow, colorsByRow) {
@@ -89,31 +93,65 @@ function createColorsCard(id, colorGrid) {
   };
 }
 
-function createNumbersAndColorsCard(id, colorGrid) {
+function createNumbersAndColorsCard(id, colorGrid, numbersByRow) {
   return {
     id,
     type: "numbersAndColors",
-    rows: createRows(
-      CARD_COLORS.map(() => shuffledNumbers()),
-      colorGrid,
-    ),
+    rows: createRows(numbersByRow, colorGrid),
   };
 }
 
-function createUniqueCards(startId, count, createCard) {
+function createUniqueCards(startId, count, createCard, usedSignatures) {
   const cards = [];
-  const signatures = new Set();
+  let attempts = 0;
 
   while (cards.length < count) {
+    attempts += 1;
+
+    if (attempts > 10000) {
+      throw new Error(`Could not create ${count} unique cards from #${startId}.`);
+    }
+
     const card = createCard(startId + cards.length);
     const signature = signatureForCard(card);
 
-    if (signatures.has(signature)) {
+    if (usedSignatures.has(signature)) {
       continue;
     }
 
-    signatures.add(signature);
+    usedSignatures.add(signature);
     cards.push(card);
+  }
+
+  return cards;
+}
+
+function createUniqueCardsFromGrids(startId, count, grids, createCard, usedSignatures) {
+  const cards = [];
+
+  for (const grid of grids) {
+    if (cards.length === count) {
+      break;
+    }
+
+    const card = createCard(startId + cards.length, grid);
+
+    if (!card) {
+      continue;
+    }
+
+    const signature = signatureForCard(card);
+
+    if (usedSignatures.has(signature)) {
+      continue;
+    }
+
+    usedSignatures.add(signature);
+    cards.push(card);
+  }
+
+  if (cards.length < count) {
+    throw new Error(`Could only create ${cards.length} unique cards from #${startId}.`);
   }
 
   return cards;
@@ -214,18 +252,120 @@ function enumerateLegalColorGrids() {
   return grids;
 }
 
-function takeColorGrids(count) {
-  return shuffle(enumerateLegalColorGrids()).slice(0, count);
+function shuffledColorGrids() {
+  return shuffle(enumerateLegalColorGrids());
+}
+
+function hasColorNumberCompleteness(colorGrid, numbersByRow) {
+  return CARD_COLORS.every((color) => {
+    const numbers = [];
+
+    colorGrid.forEach((row, rowIndex) => {
+      row.forEach((tileColor, tileIndex) => {
+        if (tileColor === color) {
+          numbers.push(numbersByRow[rowIndex][tileIndex]);
+        }
+      });
+    });
+
+    return numbersMatchExpected(numbers);
+  });
+}
+
+function solveNumbersForColorGrid(colorGrid) {
+  const numbersByRow = CARD_COLORS.map(() => Array(CARD_NUMBERS.length).fill(null));
+  const rowRemaining = CARD_COLORS.map(() => new Set(CARD_NUMBERS));
+  const colorRemaining = Object.fromEntries(CARD_COLORS.map((color) => [color, new Set(CARD_NUMBERS)]));
+  const cells = colorGrid.flatMap((row, rowIndex) =>
+    row.map((color, tileIndex) => ({
+      color,
+      rowIndex,
+      tileIndex,
+    })),
+  );
+
+  // Fill the most constrained open cell first so invalid grids fail quickly.
+  function candidatesForCell(cell) {
+    return CARD_NUMBERS.filter((number) => rowRemaining[cell.rowIndex].has(number) && colorRemaining[cell.color].has(number));
+  }
+
+  function chooseCell() {
+    let bestIndex = -1;
+    let bestCandidates = null;
+
+    cells.forEach((cell, index) => {
+      const candidates = candidatesForCell(cell);
+
+      if (!bestCandidates || candidates.length < bestCandidates.length) {
+        bestIndex = index;
+        bestCandidates = candidates;
+      }
+    });
+
+    return { candidates: bestCandidates ?? [], index: bestIndex };
+  }
+
+  function walk() {
+    if (cells.length === 0) {
+      return numbersByRow.map((row) => row.map(Number));
+    }
+
+    const { candidates, index } = chooseCell();
+
+    if (index < 0 || candidates.length === 0) {
+      return null;
+    }
+
+    const [cell] = cells.splice(index, 1);
+
+    for (const number of shuffle(candidates)) {
+      numbersByRow[cell.rowIndex][cell.tileIndex] = number;
+      rowRemaining[cell.rowIndex].delete(number);
+      colorRemaining[cell.color].delete(number);
+
+      const result = walk();
+
+      if (result) {
+        return result;
+      }
+
+      numbersByRow[cell.rowIndex][cell.tileIndex] = null;
+      rowRemaining[cell.rowIndex].add(number);
+      colorRemaining[cell.color].add(number);
+    }
+
+    cells.splice(index, 0, cell);
+    return null;
+  }
+
+  return walk();
 }
 
 async function main() {
-  const colorGrids = takeColorGrids(66);
-  const cards = [
-    createStandardCard(),
-    ...createUniqueCards(2, 33, createNumbersCard),
-    ...colorGrids.slice(0, 33).map((grid, index) => createColorsCard(35 + index, grid)),
-    ...colorGrids.slice(33).map((grid, index) => createNumbersAndColorsCard(68 + index, grid)),
-  ];
+  const usedSignatures = new Set();
+  const legalColorGrids = shuffledColorGrids();
+  const standardNumbersByRow = CARD_COLORS.map(standardNumbersForRow);
+  const colorCompleteGrids = legalColorGrids.filter((grid) => hasColorNumberCompleteness(grid, standardNumbersByRow));
+  const cards = [];
+  const standardCard = createStandardCard();
+
+  usedSignatures.add(signatureForCard(standardCard));
+  cards.push(
+    standardCard,
+    ...createUniqueCards(2, 33, createNumbersCard, usedSignatures),
+    ...createUniqueCardsFromGrids(35, 33, colorCompleteGrids, createColorsCard, usedSignatures),
+    ...createUniqueCardsFromGrids(
+      68,
+      33,
+      legalColorGrids,
+      (id, grid) => {
+        const numbersByRow = solveNumbersForColorGrid(grid);
+
+        return numbersByRow ? createNumbersAndColorsCard(id, grid, numbersByRow) : null;
+      },
+      usedSignatures,
+    ),
+  );
   const errors = validateScoreCards(cards);
 
   if (errors.length > 0) {

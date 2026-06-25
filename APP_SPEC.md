@@ -253,6 +253,21 @@ Row identity and tile color are separate concepts:
 - A tile color controls scoring and mixed-die eligibility.
 - A tile number controls whether a white sum or mixed sum matches that tile.
 
+Color-number completeness:
+
+- Every preset must give each tile color exactly one tile for every number `2-12`.
+- Red tiles collectively contain `2-12` exactly once.
+- Yellow tiles collectively contain `2-12` exactly once.
+- Green tiles collectively contain `2-12` exactly once.
+- Blue tiles collectively contain `2-12` exactly once.
+- This is separate from the row rule that each row also contains `2-12` exactly once.
+
+Implementation status:
+
+- The checked-in generator uses seed `qwixx-score-cards-v2-color-number-complete`.
+- The checked-in validator rejects any preset that violates color-number completeness.
+- The checked-in `scoreCards.json` has been regenerated under this rule.
+
 ### Standard Preset
 
 Card `#1` is the current standard score card:
@@ -290,6 +305,7 @@ Rules:
 - Each row's 11 segment lengths must sum to 11.
 - Each column contains exactly one red tile, one yellow tile, one green tile, and one blue tile.
 - Each generated mixed-color card must satisfy all row-segment and column-balance constraints.
+- Each color must collectively contain each number `2-12` exactly once across the full card.
 - Generated mixed-color cards must be unique across the 33 mixed-color presets.
 - Generated mixed-color cards must not duplicate any other preset.
 - The generator should sample uniformly from the legal color arrangements defined by these constraints.
@@ -309,10 +325,19 @@ Cards `#68-100` combine both variations:
 
 - Each row has numbers `2-12` exactly once in a mixed visual order.
 - Tile colors follow the mixed-color constraints.
+- Each color must collectively contain each number `2-12` exactly once across the full card.
 - Generated cards must be unique across the 33 combined presets.
 - Generated combined cards must not duplicate any other preset.
 - Row progression uses visual order.
 - Tile color controls scoring and mixed-die eligibility.
+
+Combined card generation is constrained:
+
+- Number order and color arrangement cannot be generated independently.
+- A random legal color grid plus independent random row-number permutations can violate color-number completeness.
+- The generator should treat combined cards as a constrained assignment problem.
+- A good approach is to choose a legal color grid, then assign row numbers with backtracking or another exact solver so every row and every color receives `2-12` exactly once.
+- Rejection sampling from independent random number rows is not preferred because it hides the coupling between the row and color constraints.
 
 ### Score Card Picker Page
 
@@ -1312,7 +1337,9 @@ Create a deterministic generation script:
 - Generate 33 mixed-color cards.
 - Generate 33 mixed-number-and-color cards.
 - Reject duplicate full card layouts within each generated category and across the full 100-card set.
-- For mixed-color layouts, sample from legal arrangements only after row-segment and column-balance constraints are satisfied.
+- For mixed-color layouts, sample from legal arrangements only after row-segment, column-balance, and color-number completeness constraints are satisfied.
+- For mixed-number-and-color layouts, solve number placement against the chosen color grid instead of independently shuffling row numbers.
+- Combined layouts should use backtracking or another exact solver so each row and each color both contain `2-12` exactly once.
 - Prefer an offline enumeration/backtracking generator that can prove every generated card is legal before writing JSON.
 - Write one checked-in JSON file containing all 100 presets.
 
@@ -1327,6 +1354,7 @@ Create a validator script or validator module:
 - For mixed-color and combined cards, confirm each row has exactly one contiguous segment per color.
 - For mixed-color and combined cards, confirm every segment length is 2-4.
 - For mixed-color and combined cards, confirm every column contains exactly one tile of each color.
+- For every card, confirm each color collectively contains every number `2-12` exactly once.
 - Confirm generated category uniqueness.
 - Confirm global full-layout uniqueness across all 100 cards.
 
@@ -1492,7 +1520,7 @@ Sync play behavior:
 Add validation tests for preset data:
 
 - Run the preset validator in `npm run verify:ui` or a separate script called by the verifier.
-- Fail if any card violates the fixed ranges, number uniqueness, color segment constraints, column color constraints, category uniqueness, or global uniqueness requirements.
+- Fail if any card violates the fixed ranges, row number uniqueness, color-number completeness, color segment constraints, column color constraints, category uniqueness, or global uniqueness requirements.
 
 Add UI checks:
 
@@ -1774,6 +1802,7 @@ Before considering an implementation complete:
 - Run the preset score-card validator.
 - Verify preset data contains exactly 100 cards with fixed category ranges.
 - Verify mixed-number, mixed-color, and combined presets satisfy all generation constraints.
+- Verify every color in every preset collectively contains each number `2-12` exactly once.
 - Verify the Home tabs work and Local mode preserves the agreed player controls.
 - Verify Local home shows the personal selected score card and allows editing it.
 - Verify initial Sync setup shows no score card before hosting or joining.
