@@ -94,6 +94,11 @@ type SyncReadyPayload = {
   reachedFourPenalties: boolean;
 };
 
+type SyncClosedBy = {
+  playerId: string;
+  row: RowColor;
+};
+
 type BarcodeDetectorResult = {
   rawValue: string;
 };
@@ -135,6 +140,7 @@ type LatestSyncState = {
   syncReadyPayloads: SyncReadyPayload[];
   syncHostPlayerId: string | null;
   selectedPlayerId: string | null;
+  showHints: boolean;
 };
 
 type ActiveGame = {
@@ -961,6 +967,21 @@ function createReadyPayload(turnId: string, playerId: string, penalties: number,
   };
 }
 
+function createClosedBy(payloads: SyncReadyPayload[]) {
+  return payloads.flatMap((payload) =>
+    payload.closedRows.map((row) => ({
+      playerId: payload.playerId,
+      row,
+    })),
+  );
+}
+
+function getPenaltyPlayerIds(payloads: SyncReadyPayload[]) {
+  return payloads
+    .filter((payload) => payload.reachedFourPenalties)
+    .map((payload) => payload.playerId);
+}
+
 function commitLocalTurnState(rows: RowsState, penalties: number, turn: TurnDraft) {
   const nextRows = cloneRows(rows);
 
@@ -1030,6 +1051,70 @@ function normalizeReadyPayload(value: unknown): SyncReadyPayload | null {
   };
 }
 
+function normalizeClosedBy(value: unknown): SyncClosedBy[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    const entry = item as Partial<SyncClosedBy>;
+
+    if (typeof entry.playerId !== "string" || !isRowColor(entry.row)) {
+      return [];
+    }
+
+    return [{ playerId: entry.playerId, row: entry.row }];
+  });
+}
+
+function normalizePlayerIds(value: unknown) {
+  return Array.isArray(value) ? value.filter((playerId): playerId is string => typeof playerId === "string") : [];
+}
+
+function playerName(players: Player[], playerId: string) {
+  return players.find((player) => player.id === playerId)?.name ?? "A player";
+}
+
+function formatNameList(names: string[]) {
+  if (names.length <= 1) {
+    return names[0] ?? "A player";
+  }
+
+  if (names.length === 2) {
+    return `${names[0]} and ${names[1]}`;
+  }
+
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
+function orderedNamesForPlayerIds(players: Player[], playerIds: string[]) {
+  const uniqueIds = Array.from(new Set(playerIds));
+  const orderedIds = [
+    ...players.filter((player) => uniqueIds.includes(player.id)).map((player) => player.id),
+    ...uniqueIds.filter((playerId) => !players.some((player) => player.id === playerId)),
+  ];
+
+  return orderedIds.map((playerId) => playerName(players, playerId));
+}
+
+function formatSyncAdvanceToast(closedBy: SyncClosedBy[], penaltyPlayerIds: string[], players: Player[]) {
+  const closureMessages = ROW_COLORS.flatMap((row) => {
+    const rowPlayerIds = closedBy.filter((entry) => entry.row === row).map((entry) => entry.playerId);
+
+    if (rowPlayerIds.length === 0) {
+      return [];
+    }
+
+    return [`${formatNameList(orderedNamesForPlayerIds(players, rowPlayerIds))} closed ${row}`];
+  });
+  const penaltyMessage =
+    penaltyPlayerIds.length > 0
+      ? `${formatNameList(orderedNamesForPlayerIds(players, penaltyPlayerIds))} reached 4 penalties`
+      : "";
+
+  return [...closureMessages, penaltyMessage].filter(Boolean).join(". ");
+}
+
 function App() {
   const savedGameRef = useRef<ActiveGame | null>(readActiveGame());
   const savedGame = savedGameRef.current;
@@ -1051,6 +1136,8 @@ function App() {
   const [syncAnswerText, setSyncAnswerText] = useState("");
   const [syncCameraMode, setSyncCameraMode] = useState<"answer" | "offer" | null>(null);
   const [syncMessage, setSyncMessage] = useState("");
+  const [syncPenaltyPlayerIds, setSyncPenaltyPlayerIds] = useState<string[]>([]);
+  const [syncToastMessage, setSyncToastMessage] = useState("");
   const [gamePlayers, setGamePlayers] = useState<Player[]>(savedGame?.players ?? []);
   const [currentPlayerIndex, setCurrentPlayerIndex] = useState(savedGame?.currentPlayerIndex ?? 0);
   const [rows, setRows] = useState<RowsState>(savedGame?.rows ?? createEmptyRows);
@@ -1068,6 +1155,7 @@ function App() {
   const draftNameInputRef = useRef<HTMLInputElement>(null);
   const hostTransportRef = useRef<SyncHostTransport | null>(null);
   const joinTransportRef = useRef<SyncJoinTransport | null>(null);
+  const syncToastTimeoutRef = useRef(0);
   const latestRef = useRef<LatestSyncState>({
     rows,
     penalties,
@@ -1080,6 +1168,7 @@ function App() {
     syncReadyPayloads,
     syncHostPlayerId,
     selectedPlayerId,
+    showHints,
   });
 
   const selectedPlayerExists = selectedPlayerId ? players.some((player) => player.id === selectedPlayerId) : false;
@@ -1114,6 +1203,7 @@ function App() {
   const penaltyEnabled = canSelectPenalty(turn, isUserTurn, penalties, gameOver || isLocalReady);
   const totalScore = getTotalScore(rows, penalties, turn);
   const penaltyCount = getPenaltyCount(penalties, turn);
+  const syncPenaltyLabel = `${formatNameList(orderedNamesForPlayerIds(gamePlayers, syncPenaltyPlayerIds))} reached 4 penalties`;
   const canStart =
     players.length > 0 &&
     players.every((player) => player.name.trim().length > 0) &&
@@ -1125,6 +1215,36 @@ function App() {
 
   function syncLatestState(updates: Partial<LatestSyncState>) {
     latestRef.current = { ...latestRef.current, ...updates };
+  }
+
+  function clearSyncToast() {
+    window.clearTimeout(syncToastTimeoutRef.current);
+    syncToastTimeoutRef.current = 0;
+    setSyncToastMessage("");
+  }
+
+  function clearSyncAdvanceFeedback() {
+    setSyncPenaltyPlayerIds([]);
+    clearSyncToast();
+  }
+
+  function showSyncToast(message: string) {
+    clearSyncToast();
+
+    if (!message) {
+      return;
+    }
+
+    setSyncToastMessage(message);
+    syncToastTimeoutRef.current = window.setTimeout(() => {
+      setSyncToastMessage("");
+      syncToastTimeoutRef.current = 0;
+    }, 4200);
+  }
+
+  function applySyncAdvanceFeedback(closedBy: SyncClosedBy[], penaltyPlayerIds: string[], playersForNames: Player[]) {
+    setSyncPenaltyPlayerIds(penaltyPlayerIds);
+    showSyncToast(formatSyncAdvanceToast(closedBy, penaltyPlayerIds, playersForNames));
   }
 
   useEffect(() => {
@@ -1201,6 +1321,7 @@ function App() {
       syncReadyPayloads,
       syncHostPlayerId,
       selectedPlayerId,
+      showHints,
     };
   }, [
     rows,
@@ -1214,9 +1335,11 @@ function App() {
     syncReadyPayloads,
     syncHostPlayerId,
     selectedPlayerId,
+    showHints,
   ]);
 
   useEffect(() => () => {
+    window.clearTimeout(syncToastTimeoutRef.current);
     hostTransportRef.current?.close();
     joinTransportRef.current?.close();
   }, []);
@@ -1311,6 +1434,7 @@ function App() {
     hostTransportRef.current?.close();
     joinTransportRef.current?.close();
     localStorage.removeItem(ACTIVE_GAME_KEY);
+    clearSyncAdvanceFeedback();
     syncLatestState({
       rows: game.rows,
       penalties: game.penalties,
@@ -1366,6 +1490,7 @@ function App() {
     setGameOverReason(null);
     setUndoStack([]);
     setRollAnimationKey(0);
+    clearSyncAdvanceFeedback();
   }
 
   function resetSyncRuntime() {
@@ -1387,6 +1512,7 @@ function App() {
     setSyncAnswerText("");
     setSyncCameraMode(null);
     setSyncMessage("");
+    clearSyncAdvanceFeedback();
   }
 
   function beginHostSync() {
@@ -1585,12 +1711,13 @@ function App() {
     if (message.type === "gameStart") {
       const nextPlayers = normalizePlayers(message.players);
       const turnId = typeof message.turnId === "string" ? message.turnId : nextTurnId();
+      const nextShowHints = typeof message.showHints === "boolean" ? message.showHints : latestRef.current.showHints;
 
       if (nextPlayers.length === 0) {
         return;
       }
 
-      startSyncedPlay(nextPlayers, turnId);
+      startSyncedPlay(nextPlayers, turnId, nextShowHints);
       return;
     }
 
@@ -1617,6 +1744,14 @@ function App() {
       syncLatestState({ syncReadyPayloads: payloads, syncPhase: "turn" });
       setSyncReadyPayloads(payloads);
       setSyncPhase("turn");
+      return;
+    }
+
+    if (message.type === "hintsChanged") {
+      if (typeof message.showHints === "boolean") {
+        syncLatestState({ showHints: message.showHints });
+        setShowHints(message.showHints);
+      }
       return;
     }
 
@@ -1648,7 +1783,9 @@ function App() {
     if (message.type === "hostStartOver") {
       const nextPlayers = normalizePlayers(message.players);
       const turnId = typeof message.turnId === "string" ? message.turnId : nextTurnId();
-      startSyncedPlay(nextPlayers.length > 0 ? nextPlayers : latestRef.current.gamePlayers, turnId);
+      const nextShowHints = typeof message.showHints === "boolean" ? message.showHints : latestRef.current.showHints;
+
+      startSyncedPlay(nextPlayers.length > 0 ? nextPlayers : latestRef.current.gamePlayers, turnId, nextShowHints);
       return;
     }
 
@@ -1665,10 +1802,12 @@ function App() {
     removeSyncPlayer(playerId);
   }
 
-  function startSyncedPlay(nextPlayers: Player[], turnId: string) {
+  function startSyncedPlay(nextPlayers: Player[], turnId: string, nextShowHints = showHints) {
     const nextRows = createEmptyRows();
     const nextTurn = createEmptyTurn();
 
+    clearSyncAdvanceFeedback();
+    setShowHints(nextShowHints);
     syncLatestState({
       rows: nextRows,
       penalties: 0,
@@ -1678,6 +1817,7 @@ function App() {
       syncTurnId: turnId,
       syncPhase: "turn",
       syncReadyPayloads: [],
+      showHints: nextShowHints,
     });
     setMode("sync");
     setPage("play");
@@ -1706,6 +1846,7 @@ function App() {
     hostTransportRef.current?.broadcast({
       type: "gameStart",
       players: gamePlayers,
+      showHints,
       turnId,
     });
   }
@@ -1825,7 +1966,10 @@ function App() {
 
   function applySyncAdvanceResult(message: SyncWireMessage) {
     const latest = latestRef.current;
-    const closedRows = Array.isArray(message.closedRows) ? uniqueRows(message.closedRows.filter(isRowColor)) : [];
+    const closedBy = normalizeClosedBy(message.closedBy);
+    const legacyClosedRows = Array.isArray(message.closedRows) ? uniqueRows(message.closedRows.filter(isRowColor)) : [];
+    const closedRows = closedBy.length > 0 ? uniqueRows(closedBy.map((entry) => entry.row)) : legacyClosedRows;
+    const penaltyPlayerIds = normalizePlayerIds(message.penaltyPlayerIds);
     const nextPlayers = normalizePlayers(message.players);
     const nextIndex = Number(message.currentPlayerIndex);
     const nextTurn = typeof message.nextTurnId === "string" ? message.nextTurnId : nextTurnId();
@@ -1859,14 +2003,17 @@ function App() {
     setSyncReadyPayloads([]);
     setSyncPhase(nextGameOver ? "gameOver" : "turn");
     setRollAnimationKey(0);
+    applySyncAdvanceFeedback(closedBy, penaltyPlayerIds, nextGamePlayers);
   }
 
   function commitSyncReadyPayloads(activePayloads: SyncReadyPayload[]) {
     const latest = latestRef.current;
-    const closedRows = uniqueRows(activePayloads.flatMap((payload) => payload.closedRows));
+    const closedBy = createClosedBy(activePayloads);
+    const closedRows = uniqueRows(closedBy.map((entry) => entry.row));
+    const penaltyPlayerIds = getPenaltyPlayerIds(activePayloads);
     const committed = commitLocalTurnState(latest.rows, latest.penalties, latest.turn);
     const withGlobalClosures = applyGlobalClosedRows(committed.rows, closedRows);
-    const anyPenaltyGameOver = activePayloads.some((payload) => payload.reachedFourPenalties);
+    const anyPenaltyGameOver = penaltyPlayerIds.length > 0;
     const rowPenaltyState = getGameOverFromRowsAndPenalties(
       withGlobalClosures,
       committed.penalties,
@@ -1897,13 +2044,16 @@ function App() {
     setSyncReadyPayloads([]);
     setSyncPhase(nextGameOver ? "gameOver" : "turn");
     setRollAnimationKey(0);
+    applySyncAdvanceFeedback(closedBy, penaltyPlayerIds, latest.gamePlayers);
     hostTransportRef.current?.broadcast({
       type: "advanceResult",
+      closedBy,
       closedRows,
       currentPlayerIndex: nextIndex,
       gameOver: nextGameOver,
       gameOverReason: nextReason,
       nextTurnId: nextTurn,
+      penaltyPlayerIds,
       players: latest.gamePlayers,
     });
   }
@@ -1924,6 +2074,7 @@ function App() {
     setSyncReadyPayloads([]);
     setSyncPhase("turn");
     setRollAnimationKey(0);
+    clearSyncAdvanceFeedback();
   }
 
   function removeSyncPlayer(playerId: string) {
@@ -2014,6 +2165,20 @@ function App() {
     setConfirmAction("startOver");
   }
 
+  function toggleShowHints() {
+    const nextShowHints = !showHints;
+
+    syncLatestState({ showHints: nextShowHints });
+    setShowHints(nextShowHints);
+
+    if (mode === "sync" && isHost) {
+      hostTransportRef.current?.broadcast({
+        type: "hintsChanged",
+        showHints: nextShowHints,
+      });
+    }
+  }
+
   function confirmStartOver() {
     if (!selectedPlayerId || gamePlayers.length === 0) {
       return;
@@ -2024,10 +2189,11 @@ function App() {
     if (mode === "sync" && isHost) {
       const nextTurn = nextTurnId();
 
-      startSyncedPlay(gamePlayers, nextTurn);
+      startSyncedPlay(gamePlayers, nextTurn, showHints);
       hostTransportRef.current?.broadcast({
         type: "hostStartOver",
         players: gamePlayers,
+        showHints,
         turnId: nextTurn,
       });
       return;
@@ -2550,14 +2716,16 @@ function App() {
                     <RotateCcw size={19} />
                   </button>
                 ) : null}
-                <button
-                  className={showHints ? "icon-action selected" : "icon-action"}
-                  type="button"
-                  onClick={() => setShowHints((currentShowHints) => !currentShowHints)}
-                  aria-label={showHints ? "Hide legal options" : "Show legal options"}
-                >
-                  {showHints ? <Eye size={19} /> : <EyeOff size={19} />}
-                </button>
+                {mode === "local" || isHost ? (
+                  <button
+                    className={showHints ? "icon-action selected" : "icon-action"}
+                    type="button"
+                    onClick={toggleShowHints}
+                    aria-label={showHints ? "Hide legal options" : "Show legal options"}
+                  >
+                    {showHints ? <Eye size={19} /> : <EyeOff size={19} />}
+                  </button>
+                ) : null}
               </div>
             </div>
 
@@ -2685,6 +2853,11 @@ function App() {
                   <AlertTriangle size={18} />
                   <span>4x</span>
                 </button>
+              ) : syncPenaltyPlayerIds.length > 0 ? (
+                <span className="opponent-penalty-button readonly" role="status" aria-label={syncPenaltyLabel}>
+                  <AlertTriangle size={18} />
+                  <span>4x</span>
+                </span>
               ) : null}
             </div>
 
@@ -2698,6 +2871,12 @@ function App() {
 
             <ScoreTotals rows={rows} penalties={penalties} turn={turn} totalScore={totalScore} />
           </section>
+
+          {mode === "sync" && syncToastMessage ? (
+            <div className="sync-toast" role="status">
+              {syncToastMessage}
+            </div>
+          ) : null}
         </div>
       ) : null}
 

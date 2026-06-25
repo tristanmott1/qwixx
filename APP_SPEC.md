@@ -294,8 +294,10 @@ The legal options hint toggle:
 
 - Shows or hides score-card legal-move hints.
 - Defaults to off.
-- Persists locally.
-- Is a per-device preference in both local and sync mode.
+- Persists locally in local mode.
+- Is controlled by the host in sync mode.
+- Applies to every connected player in sync mode.
+- Is visible only to the host during synced play.
 
 Controls should use icons whenever possible:
 
@@ -512,7 +514,9 @@ At every point in the selection stage:
 Legal-move visual hints are controlled by the legal options hint toggle:
 
 - The default is off.
-- The preference persists locally.
+- The preference persists locally in local mode.
+- In sync mode, the host's current hint setting is sent at game start and start over.
+- In sync mode, host hint changes are broadcast immediately.
 - Hints affect only visual treatment, not whether a control is enabled.
 - When hints are off, legal score-card tiles look completely normal but remain clickable.
 - When hints are on, legal white-sum score-card options use a bright white tile treatment.
@@ -622,6 +626,7 @@ In sync mode:
 - There is no opponent 4x penalty control.
 - Players only enter their own penalties.
 - Opponent 4-penalty game-over state is learned from synced Ready payloads.
+- If a synced Ready payload ends the game by reaching 4 penalties, the penalty row shows a read-only 4x indicator after advance.
 
 Penalty row layout:
 
@@ -696,6 +701,24 @@ The Ready payload contains only shared consequences:
 - Whether that player reached 4 penalties on this turn.
 
 The Ready payload does not include the player's full private score card.
+
+When synced advance applies shared consequences:
+
+- The advance result includes `closedBy: { playerId, row }[]`.
+- The advance result includes `penaltyPlayerIds: string[]`.
+- `closedBy` identifies which players closed which rows.
+- `penaltyPlayerIds` identifies which players reached 4 penalties.
+- Everyone sees a toast after advance for row closures and 4-penalty events.
+- Toasts use player names consistently.
+- Row-closure toast examples:
+  - `Bob closed yellow`.
+  - `Bob and Alice closed yellow`.
+  - `Bob closed yellow, Alice closed blue`.
+- Penalty toast examples:
+  - `Alice reached 4 penalties`.
+  - `Alice and Bob reached 4 penalties`.
+- If row-closure and penalty events both occur, the toast joins the messages with `. `.
+- The sync 4x penalty-row indicator is read-only and reflects the latest automatic advance metadata.
 
 When all active players are Ready:
 

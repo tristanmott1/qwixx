@@ -823,8 +823,31 @@ button:focus-visible {
   opacity: 0.44;
 }
 
+.opponent-penalty-button.readonly {
+  border-color: #d97706;
+  background: #ffedd5;
+  opacity: 1;
+}
+
 .opponent-penalty-button span {
   font-size: 0.82rem;
+}
+
+.sync-toast {
+  position: fixed;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 40;
+  width: min(calc(100% - 32px), 430px);
+  transform: translateX(-50%);
+  border: 1px solid rgba(30, 41, 59, 0.2);
+  border-radius: 8px;
+  background: #1e293b;
+  color: #ffffff;
+  box-shadow: 0 14px 30px rgba(30, 41, 59, 0.22);
+  padding: 11px 14px;
+  text-align: center;
+  font-weight: 850;
 }
 
 .penalty-boxes {

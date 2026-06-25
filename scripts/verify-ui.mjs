@@ -116,6 +116,13 @@ async function runSourceChecks() {
   assert(appSource.includes("CircleDashed"), "Compact sync rows include a waiting icon.");
   assert(appSource.includes("sync-player-status ready"), "Compact sync rows include a ready status.");
   assert(appSource.includes("sync-player-status waiting"), "Compact sync rows include a waiting status.");
+  assert(appSource.includes("hintsChanged"), "Sync hint changes are broadcast to connected players.");
+  assert(appSource.includes("closedBy"), "Sync advance carries row-closure player metadata.");
+  assert(appSource.includes("penaltyPlayerIds"), "Sync advance carries 4-penalty player metadata.");
+  assert(appSource.includes("formatSyncAdvanceToast"), "Sync advance events are formatted into toast messages.");
+  assert(appSource.includes("closed ${row}"), "Sync toast formatter names closed rows.");
+  assert(appSource.includes("reached 4 penalties"), "Sync toast formatter names 4-penalty events.");
+  assert(appSource.includes("opponent-penalty-button readonly"), "Sync 4x indicator is read-only.");
 }
 
 function rowsState() {
@@ -346,6 +353,7 @@ async function runSyncHostChecks(page) {
   assert((await page.locator(".sync-play-strip").count()) === 0, "Sync play does not show a duplicate Ready-count strip.");
   assert((await page.locator(".sync-player-status.waiting").count()) === 1, "Sync compact player row shows waiting status.");
   assert((await page.locator(".sync-player-status.ready").count()) === 0, "Sync compact player row starts unready.");
+  assert((await page.getByRole("button", { name: "Show legal options" }).count()) === 1, "Sync host shows the hint toggle.");
   assert((await page.getByRole("button", { name: "Opponent reached four penalties" }).count()) === 0, "Sync play hides opponent 4x control.");
   assert(await page.getByRole("button", { name: "Ready" }).isDisabled(), "Sync Ready starts disabled before rolling.");
 
