@@ -289,16 +289,6 @@ export class SyncHostTransport {
     this.peers.forEach((peer) => sendChannelMessage(peer.channel, message));
   }
 
-  sendTo(playerId: string, message: SyncWireMessage) {
-    const peer = this.peers.get(playerId);
-
-    if (!peer) {
-      return;
-    }
-
-    sendChannelMessage(peer.channel, message);
-  }
-
   removePeer(playerId: string) {
     const peer = this.peers.get(playerId);
 

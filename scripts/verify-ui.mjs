@@ -294,9 +294,13 @@ async function runSyncHostChecks(page) {
   await page.getByRole("button", { name: "Ready" }).click();
   assert(await page.getByRole("button", { name: "Undo" }).isDisabled(), "Sync Ready disables Undo.");
   assert(!(await page.getByRole("button", { name: "Advance" }).isDisabled()), "Single-player sync host can advance after Ready.");
+  assert((await page.getByRole("button", { name: /Transfer host/ }).count()) === 0, "Permanent-host replacement controls are not shown.");
   await page.getByRole("button", { name: "Advance" }).click();
   assert((await page.getByRole("button", { name: "Ready" }).count()) === 1, "Sync returns to the next turn after Advance.");
   await page.screenshot({ path: outputPath("sync-play-after-advance-mobile.png"), fullPage: true });
+  await page.getByRole("button", { name: "Exit" }).click();
+  assert((await page.getByRole("dialog", { name: "Exit?" }).count()) === 1, "Sync host Exit asks for confirmation.");
+  await page.getByRole("button", { name: "Cancel" }).click();
 }
 
 async function runSyncTransportChecks(browser) {
@@ -347,59 +351,14 @@ async function runSyncTransportChecks(browser) {
   await joinPage.evaluate(() => window.__join.send({ type: "ready", payload: { turnId: "t1", playerId: "bob" } }));
   await hostPage.waitForFunction(() => window.__messages?.some((message) => message.type === "ready"), null, { timeout: 5000 });
 
-  const transferOffers = await joinPage.evaluate(async () => {
-    const { SyncHostTransport } = await import("/src/syncTransport.ts");
-    window.__newHostMessages = [];
-    window.__newHost = new SyncHostTransport({
-      callbacks: {
-        onMessage: (_playerId, message) => window.__newHostMessages.push(message),
-      },
-      hostName: "Bob",
-      hostPlayerId: "bob",
-      roomId: "transfer",
-    });
-
-    return {
-      alice: await window.__newHost.createOffer(),
-      cora: await window.__newHost.createOffer(),
-    };
-  });
-
-  const aliceTransferAnswer = await hostPage.evaluate(async (offerText) => {
-    const { SyncJoinTransport } = await import("/src/syncTransport.ts");
-    window.__aliceJoinMessages = [];
-    window.__aliceJoin = new SyncJoinTransport({
-      onMessage: (_playerId, message) => window.__aliceJoinMessages.push(message),
-    });
-    const result = await window.__aliceJoin.createAnswer(offerText, { id: "alice", name: "Alice" });
-    return result.answerText;
-  }, transferOffers.alice);
-
-  const coraTransferAnswer = await otherPage.evaluate(async (offerText) => {
-    const { SyncJoinTransport } = await import("/src/syncTransport.ts");
-    window.__coraJoinMessages = [];
-    window.__coraJoin = new SyncJoinTransport({
-      onMessage: (_playerId, message) => window.__coraJoinMessages.push(message),
-    });
-    const result = await window.__coraJoin.createAnswer(offerText, { id: "cora", name: "Cora" });
-    return result.answerText;
-  }, transferOffers.cora);
-
-  await joinPage.evaluate(
-    async ({ aliceAnswer, coraAnswer }) => {
-      await window.__newHost.acceptAnswer(aliceAnswer);
-      await window.__newHost.acceptAnswer(coraAnswer);
-      window.__newHost.broadcast({ type: "hostTransferComplete", hostPlayerId: "bob" });
-    },
-    { aliceAnswer: aliceTransferAnswer, coraAnswer: coraTransferAnswer },
-  );
-  await hostPage.waitForFunction(
-    () => window.__aliceJoinMessages?.some((message) => message.type === "hostTransferComplete"),
+  await hostPage.evaluate(() => window.__host.broadcast({ type: "sessionEnded" }));
+  await joinPage.waitForFunction(
+    () => window.__joinMessages?.some((message) => message.type === "sessionEnded"),
     null,
     { timeout: 5000 },
   );
   await otherPage.waitForFunction(
-    () => window.__coraJoinMessages?.some((message) => message.type === "hostTransferComplete"),
+    () => window.__joinMessages?.some((message) => message.type === "sessionEnded"),
     null,
     { timeout: 5000 },
   );

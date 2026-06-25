@@ -320,7 +320,7 @@ button:focus-visible {
 
 .sync-player-row {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) repeat(4, auto);
+  grid-template-columns: 26px minmax(0, 1fr) repeat(3, auto);
   gap: 8px;
   align-items: center;
   min-height: 38px;
