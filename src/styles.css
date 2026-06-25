@@ -380,7 +380,7 @@ button:focus-visible {
 
 .qr-panel img,
 .qr-placeholder {
-  width: min(100%, 260px);
+  width: min(100%, 380px);
   aspect-ratio: 1;
   border-radius: 8px;
   background: #ffffff;
@@ -986,12 +986,29 @@ button:focus-visible {
   box-shadow: 0 18px 48px rgba(24, 24, 27, 0.18);
 }
 
+.scanner-frame {
+  position: relative;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
 .scanner-modal video {
+  display: block;
   width: 100%;
   aspect-ratio: 1;
   object-fit: cover;
+}
+
+.scanner-target {
+  position: absolute;
+  inset: 11%;
+  border: 3px solid rgba(255, 255, 255, 0.88);
   border-radius: 8px;
-  background: var(--surface-soft);
+  box-shadow:
+    0 0 0 999px rgba(24, 24, 27, 0.22),
+    0 0 0 1px rgba(24, 24, 27, 0.12);
+  pointer-events: none;
 }
 
 @media (max-width: 560px) {

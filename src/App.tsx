@@ -110,6 +110,26 @@ type PendingJoinTransfer = {
   transport: SyncJoinTransport;
 };
 
+type BarcodeDetectorResult = {
+  rawValue: string;
+};
+
+type BarcodeDetectorInstance = {
+  detect: (source: CanvasImageSource) => Promise<BarcodeDetectorResult[]>;
+};
+
+type BarcodeDetectorConstructor = new (options: { formats: string[] }) => BarcodeDetectorInstance;
+
+type ExtendedMediaTrackCapabilities = MediaTrackCapabilities & {
+  focusMode?: string[];
+  torch?: boolean;
+};
+
+type ExtendedMediaTrackConstraintSet = MediaTrackConstraintSet & {
+  focusMode?: string;
+  torch?: boolean;
+};
+
 type GameSnapshot = {
   currentPlayerIndex: number;
   rows: RowsState;
@@ -2983,7 +3003,7 @@ function QrPanel({ label, text }: { label: string; text: string }) {
   useEffect(() => {
     let alive = true;
 
-    QRCode.toDataURL(text, { margin: 1, width: 260 })
+    QRCode.toDataURL(text, { errorCorrectionLevel: "L", margin: 3, width: 380 })
       .then((nextImage) => {
         if (alive) {
           setImage(nextImage);
@@ -3020,15 +3040,53 @@ function QrScanner({
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const scannedRef = useRef(false);
+  const trackRef = useRef<MediaStreamTrack | null>(null);
   const [error, setError] = useState("");
+  const [torchSupported, setTorchSupported] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
 
   useEffect(() => {
     let frame = 0;
     let stream: MediaStream | null = null;
+    const detectorConstructor = (window as unknown as { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector;
+    let detector: BarcodeDetectorInstance | null = null;
+
+    try {
+      detector = detectorConstructor ? new detectorConstructor({ formats: ["qr_code"] }) : null;
+    } catch {
+      detector = null;
+    }
 
     async function startCamera() {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            aspectRatio: { ideal: 1 },
+            facingMode: { ideal: "environment" },
+            height: { ideal: 1440 },
+            width: { ideal: 1440 },
+          },
+        });
+        const [track] = stream.getVideoTracks();
+        trackRef.current = track ?? null;
+
+        if (track) {
+          const capabilities = track.getCapabilities?.() as ExtendedMediaTrackCapabilities | undefined;
+          const advanced: ExtendedMediaTrackConstraintSet[] = [];
+
+          if (capabilities?.focusMode?.includes("continuous")) {
+            advanced.push({ focusMode: "continuous" });
+          }
+
+          if (capabilities?.torch) {
+            setTorchSupported(true);
+          }
+
+          if (advanced.length > 0) {
+            await track.applyConstraints({ advanced }).catch(() => undefined);
+          }
+        }
+
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play();
@@ -3039,7 +3097,22 @@ function QrScanner({
       }
     }
 
-    function scan() {
+    async function readQrCode(canvas: HTMLCanvasElement, image: ImageData) {
+      if (detector) {
+        const results = await detector.detect(canvas).catch(() => []);
+        const value = results[0]?.rawValue;
+
+        if (value) {
+          return value;
+        }
+      }
+
+      return jsQR(image.data, image.width, image.height, {
+        inversionAttempts: "attemptBoth",
+      })?.data ?? null;
+    }
+
+    async function scanFrame() {
       const video = videoRef.current;
       const canvas = canvasRef.current;
 
@@ -3055,11 +3128,11 @@ function QrScanner({
         if (context) {
           context.drawImage(video, 0, 0, canvas.width, canvas.height);
           const image = context.getImageData(0, 0, canvas.width, canvas.height);
-          const code = jsQR(image.data, image.width, image.height);
+          const code = await readQrCode(canvas, image);
 
-          if (code?.data) {
+          if (code) {
             scannedRef.current = true;
-            onScan(code.data);
+            onScan(code);
             return;
           }
         }
@@ -3068,13 +3141,30 @@ function QrScanner({
       frame = window.requestAnimationFrame(scan);
     }
 
+    function scan() {
+      void scanFrame();
+    }
+
     void startCamera();
 
     return () => {
       window.cancelAnimationFrame(frame);
       stream?.getTracks().forEach((track) => track.stop());
+      trackRef.current = null;
     };
   }, [onScan]);
+
+  async function toggleTorch() {
+    const track = trackRef.current;
+
+    if (!track) {
+      return;
+    }
+
+    const nextTorch = !torchOn;
+    await track.applyConstraints({ advanced: [{ torch: nextTorch } as ExtendedMediaTrackConstraintSet] }).catch(() => undefined);
+    setTorchOn(nextTorch);
+  }
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -3085,7 +3175,15 @@ function QrScanner({
             <X size={17} />
           </button>
         </div>
-        <video ref={videoRef} muted playsInline />
+        <div className="scanner-frame">
+          <video ref={videoRef} muted playsInline />
+          <span className="scanner-target" aria-hidden="true" />
+        </div>
+        {torchSupported ? (
+          <button className="secondary wide-button" type="button" onClick={toggleTorch}>
+            {torchOn ? "Torch off" : "Torch on"}
+          </button>
+        ) : null}
         <canvas ref={canvasRef} hidden />
         {error ? <p className="sync-status">{error}</p> : null}
       </section>

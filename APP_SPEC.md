@@ -121,6 +121,17 @@ When the user chooses Join:
 
 This two-way QR handshake is required for the offline PWA approach. The app should make it feel as lightweight as possible, but it should not pretend that a one-scan offline handshake is reliable.
 
+QR scan usability requirements:
+
+- QR codes should render large enough to scan reliably on a phone screen.
+- QR codes should include a clear quiet margin.
+- QR payloads should stay compressed to reduce visual density.
+- The scanner should request the rear camera at high resolution when available.
+- The scanner should prefer native browser QR detection when available.
+- The scanner should fall back to app-level QR decoding when native detection is unavailable.
+- The scanner should request continuous focus when the browser exposes it.
+- The scanner should offer a torch toggle when the camera exposes torch support.
+
 ## Sync Mode Network Model
 
 Sync mode uses local WebRTC data channels between the host and each joined player.
