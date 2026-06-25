@@ -2969,7 +2969,7 @@ function App() {
           </section>
 
           {mode === "sync" && syncToastMessage ? (
-            <div className="sync-toast" role="status">
+            <div className="sync-toast" role="status" aria-live="polite">
               {syncToastMessage}
             </div>
           ) : null}

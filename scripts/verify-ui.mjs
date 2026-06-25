@@ -128,6 +128,12 @@ async function runSourceChecks() {
   );
   assert(appSource.includes("closedBy"), "Sync advance carries row-closure player metadata.");
   assert(appSource.includes("penaltyPlayerIds"), "Sync advance carries 4-penalty player metadata.");
+  assert(styleSource.includes("top: 50%;"), "Sync toast is centered vertically.");
+  assert(styleSource.includes("transform: translate(-50%, -50%);"), "Sync toast is centered in the viewport.");
+  assert(styleSource.includes("background: var(--surface);"), "Sync toast uses a white app surface.");
+  assert(styleSource.includes("color: var(--ink);"), "Sync toast uses dark text.");
+  assert(styleSource.includes("pointer-events: none;"), "Sync toast does not block taps.");
+  assert(appSource.includes('className="sync-toast" role="status" aria-live="polite"'), "Sync toast is announced politely.");
   assert(appSource.includes("isAcceptingAnswer"), "Host answer acceptance is explicitly gated.");
   assert(appSource.includes("disabled={gamePlayers.length === 0 || isAcceptingAnswer}"), "Host Start is disabled while accepting an answer.");
   assert(appSource.includes("scanDisabled={isAcceptingAnswer}"), "Host Scan is disabled while accepting an answer.");

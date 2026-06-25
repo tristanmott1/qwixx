@@ -775,6 +775,9 @@ When synced advance applies shared consequences:
 - `penaltyPlayerIds` identifies which players reached 4 penalties.
 - Everyone sees a toast after advance for row closures and 4-penalty events.
 - Toasts use player names consistently.
+- Toasts appear in the middle of the screen so the event is hard to miss.
+- Toasts use a white background, black text, a subtle border, and a light shadow.
+- Toasts do not block taps while they are visible.
 - Row-closure toast examples:
   - `Bob closed yellow`.
   - `Bob and Alice closed yellow`.
