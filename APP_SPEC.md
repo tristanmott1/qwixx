@@ -126,13 +126,25 @@ QR scan usability requirements:
 - QR codes should render large enough to scan reliably on a phone screen.
 - QR codes should render as crisp vector output, not as raster images that can blur when scaled.
 - QR codes should include a clear quiet margin.
-- QR payloads should stay compressed to reduce visual density.
+- QR payloads should stay compressed and use a QR-alphanumeric-safe compact format to reduce visual density.
+- Generated host offer QR codes should use the compact `QWO:` prefix.
+- Generated join answer QR codes should use the compact `QWA:` prefix.
+- Legacy `qwixx:` QR payloads may still parse for development compatibility, but new QR codes should use the compact format.
 - The scanner should request the rear camera at high resolution when available.
 - The scanner should prefer native browser QR detection when available.
 - The scanner should fall back to app-level QR decoding when native detection is unavailable.
 - The scanner should decode the visible square scanner frame rather than the full camera frame.
 - The scanner should request continuous focus when the browser exposes it.
 - The scanner should offer a torch toggle when the camera exposes torch support.
+- The scanner should visibly show `Looking for QR` before a code is detected.
+- The scanner should visibly show `QR found` immediately after a code is detected.
+- Handshake status should distinguish decoded QR failures from WebRTC connection failures.
+- Host answer scanning should show `QR found. Accepting answer` before trying to complete the host side of the handshake.
+- Joiner host scanning should show `QR found. Creating answer` before trying to create the answer QR.
+- Successful answer creation should show `Answer ready`.
+- Successful data-channel connection should show `Connected`.
+- Camera access failure should remain separate as `Camera unavailable`.
+- Third-party scanner libraries are a future fallback if compact QR payloads and explicit status messages are still unreliable.
 
 ## Sync Mode Network Model
 

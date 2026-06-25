@@ -1450,6 +1450,16 @@ function App() {
     }
   }
 
+  function formatQrHandshakeError(error: unknown) {
+    const message = error instanceof Error ? error.message : "the handshake failed.";
+
+    if (message.startsWith("this ")) {
+      return `QR found, but ${message}`;
+    }
+
+    return `QR found, but the handshake failed. ${message}`;
+  }
+
   async function acceptJoinAnswer(value: string) {
     const hostTransport = hostTransportRef.current;
 
@@ -1458,6 +1468,7 @@ function App() {
     }
 
     setSyncCameraMode(null);
+    setSyncMessage("QR found. Accepting answer");
     try {
       const joinedPlayer = await hostTransport.acceptAnswer(value);
       const currentPlayers = latestRef.current.gamePlayers;
@@ -1473,7 +1484,7 @@ function App() {
       setSyncMessage(`${joinedPlayer.name} joined`);
       await createHostOffer();
     } catch (error) {
-      setSyncMessage(error instanceof Error ? error.message : "Could not accept answer");
+      setSyncMessage(formatQrHandshakeError(error));
     }
   }
 
@@ -1493,7 +1504,7 @@ function App() {
     });
 
     setSyncCameraMode(null);
-    setSyncMessage("Creating answer");
+    setSyncMessage("QR found. Creating answer");
     try {
       const answer = await joinTransport.createAnswer(value, localPlayer);
       hostTransportRef.current?.close();
@@ -1523,10 +1534,10 @@ function App() {
         ],
         localPlayer.id,
       );
-      setSyncMessage("Show this QR to the host");
+      setSyncMessage("Answer ready");
     } catch (error) {
       joinTransport.close();
-      setSyncMessage(error instanceof Error ? error.message : "Could not join");
+      setSyncMessage(formatQrHandshakeError(error));
     }
   }
 
@@ -2850,11 +2861,13 @@ function QrScanner({
   const scannedRef = useRef(false);
   const trackRef = useRef<MediaStreamTrack | null>(null);
   const [error, setError] = useState("");
+  const [status, setStatus] = useState("Looking for QR");
   const [torchSupported, setTorchSupported] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
 
   useEffect(() => {
     let frame = 0;
+    let scanTimeout = 0;
     let stream: MediaStream | null = null;
     const scanSize = 1024;
     const detectorConstructor = (window as unknown as { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector;
@@ -2903,6 +2916,7 @@ function QrScanner({
         }
       } catch {
         setError("Camera unavailable");
+        setStatus("");
       }
     }
 
@@ -2945,7 +2959,8 @@ function QrScanner({
 
           if (code) {
             scannedRef.current = true;
-            onScan(code);
+            setStatus("QR found");
+            scanTimeout = window.setTimeout(() => onScan(code), 120);
             return;
           }
         }
@@ -2962,6 +2977,7 @@ function QrScanner({
 
     return () => {
       window.cancelAnimationFrame(frame);
+      window.clearTimeout(scanTimeout);
       stream?.getTracks().forEach((track) => track.stop());
       trackRef.current = null;
     };
@@ -2998,7 +3014,7 @@ function QrScanner({
           </button>
         ) : null}
         <canvas ref={canvasRef} hidden />
-        {error ? <p className="sync-status">{error}</p> : null}
+        <p className="sync-status">{error || status}</p>
       </section>
     </div>
   );

@@ -1,4 +1,9 @@
-import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from "lz-string";
+import {
+  compressToEncodedURIComponent,
+  compressToUint8Array,
+  decompressFromEncodedURIComponent,
+  decompressFromUint8Array,
+} from "lz-string";
 
 export type SyncWireMessage = {
   type: string;
@@ -44,6 +49,9 @@ type SyncTransportCallbacks = {
 
 const CHANNEL_NAME = "qwixx";
 const ICE_TIMEOUT_MS = 1800;
+const COMPACT_OFFER_PREFIX = "QWO:";
+const COMPACT_ANSWER_PREFIX = "QWA:";
+const QR_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
 
 function createPeerConnection() {
   return new RTCPeerConnection({ iceServers: [] });
@@ -107,8 +115,137 @@ function waitForChannelOpen(channel: RTCDataChannel) {
   });
 }
 
+function encodeBase45(bytes: Uint8Array) {
+  let encoded = "";
+
+  for (let index = 0; index < bytes.length; index += 2) {
+    if (index + 1 >= bytes.length) {
+      const value = bytes[index];
+
+      encoded += QR_ALPHABET[value % 45];
+      encoded += QR_ALPHABET[Math.floor(value / 45)];
+      continue;
+    }
+
+    const value = bytes[index] * 256 + bytes[index + 1];
+
+    encoded += QR_ALPHABET[value % 45];
+    encoded += QR_ALPHABET[Math.floor(value / 45) % 45];
+    encoded += QR_ALPHABET[Math.floor(value / 2025)];
+  }
+
+  return encoded;
+}
+
+function decodeBase45(value: string) {
+  const bytes: number[] = [];
+
+  for (let index = 0; index < value.length; ) {
+    const remaining = value.length - index;
+
+    if (remaining === 1) {
+      return null;
+    }
+
+    if (remaining === 2) {
+      const first = QR_ALPHABET.indexOf(value[index]);
+      const second = QR_ALPHABET.indexOf(value[index + 1]);
+
+      if (first < 0 || second < 0) {
+        return null;
+      }
+
+      const byte = first + second * 45;
+
+      if (byte > 255) {
+        return null;
+      }
+
+      bytes.push(byte);
+      index += 2;
+      continue;
+    }
+
+    const first = QR_ALPHABET.indexOf(value[index]);
+    const second = QR_ALPHABET.indexOf(value[index + 1]);
+    const third = QR_ALPHABET.indexOf(value[index + 2]);
+
+    if (first < 0 || second < 0 || third < 0) {
+      return null;
+    }
+
+    const pair = first + second * 45 + third * 2025;
+
+    if (pair > 65535) {
+      return null;
+    }
+
+    bytes.push(Math.floor(pair / 256), pair % 256);
+    index += 3;
+  }
+
+  return new Uint8Array(bytes);
+}
+
+function encodeCompactPayload(prefix: string, fields: string[]) {
+  return `${prefix}${encodeBase45(compressToUint8Array(JSON.stringify(fields)))}`;
+}
+
+function parseCompactPayload(value: string) {
+  const isOffer = value.startsWith(COMPACT_OFFER_PREFIX);
+  const isAnswer = value.startsWith(COMPACT_ANSWER_PREFIX);
+
+  if (!isOffer && !isAnswer) {
+    return null;
+  }
+
+  const bytes = decodeBase45(value.slice(COMPACT_OFFER_PREFIX.length));
+  const decompressed = bytes ? decompressFromUint8Array(bytes) : null;
+  const fields = decompressed ? (JSON.parse(decompressed) as unknown) : null;
+
+  if (!Array.isArray(fields) || fields.some((field) => typeof field !== "string")) {
+    return null;
+  }
+
+  if (isOffer && fields.length === 5) {
+    const [roomId, offerId, hostPlayerId, hostName, sdp] = fields;
+
+    return {
+      kind: "qwixx-sync-offer",
+      version: 1,
+      roomId,
+      offerId,
+      hostPlayerId,
+      hostName,
+      sdp: { type: "offer", sdp },
+    } satisfies SyncOfferPayload;
+  }
+
+  if (isAnswer && fields.length === 5) {
+    const [roomId, offerId, playerId, playerName, sdp] = fields;
+
+    return {
+      kind: "qwixx-sync-answer",
+      version: 1,
+      roomId,
+      offerId,
+      playerId,
+      playerName,
+      sdp: { type: "answer", sdp },
+    } satisfies SyncAnswerPayload;
+  }
+
+  return null;
+}
+
 function parsePayload(value: string) {
   try {
+    const compactPayload = parseCompactPayload(value);
+
+    if (compactPayload) {
+      return compactPayload;
+    }
+
     if (value.startsWith("qwixx:")) {
       const decompressed = decompressFromEncodedURIComponent(value.slice(6));
       return decompressed ? (JSON.parse(decompressed) as unknown) : null;
@@ -121,7 +258,23 @@ function parsePayload(value: string) {
 }
 
 function encodePayload(value: SyncOfferPayload | SyncAnswerPayload) {
-  return `qwixx:${compressToEncodedURIComponent(JSON.stringify(value))}`;
+  if (value.kind === "qwixx-sync-offer") {
+    return encodeCompactPayload(COMPACT_OFFER_PREFIX, [
+      value.roomId,
+      value.offerId,
+      value.hostPlayerId,
+      value.hostName,
+      typeof value.sdp.sdp === "string" ? value.sdp.sdp : "",
+    ]);
+  }
+
+  return encodeCompactPayload(COMPACT_ANSWER_PREFIX, [
+    value.roomId,
+    value.offerId,
+    value.playerId,
+    value.playerName,
+    typeof value.sdp.sdp === "string" ? value.sdp.sdp : "",
+  ]);
 }
 
 function isOfferPayload(value: unknown): value is SyncOfferPayload {
@@ -247,13 +400,13 @@ export class SyncHostTransport {
     const answer = parseSyncAnswer(value);
 
     if (!answer || answer.roomId !== this.roomId) {
-      throw new Error("That QR code is not an answer for this room.");
+      throw new Error("this is not an answer QR for this room.");
     }
 
     const pending = this.pendingOffers.get(answer.offerId);
 
     if (!pending) {
-      throw new Error("That answer does not match the current host QR.");
+      throw new Error("this answer does not match the current host QR.");
     }
 
     this.pendingOffers.delete(answer.offerId);
@@ -347,7 +500,7 @@ export class SyncJoinTransport {
     const offer = parseSyncOffer(value);
 
     if (!offer) {
-      throw new Error("That QR code is not a Qwixx host offer.");
+      throw new Error("this is not a Qwixx host QR.");
     }
 
     const peerConnection = createPeerConnection();

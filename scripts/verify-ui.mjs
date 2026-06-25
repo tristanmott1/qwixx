@@ -81,6 +81,7 @@ async function launchBrowser() {
 
 async function runSourceChecks() {
   const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const transportSource = await readFile(new URL("../src/syncTransport.ts", import.meta.url), "utf8");
   const removedRefs = [
     "rowsRef",
     "turnRef",
@@ -105,6 +106,10 @@ async function runSourceChecks() {
   );
   assert(!appSource.includes("readyToAdvance"), "Sync has no between-turn readyToAdvance phase.");
   assert(!appSource.includes("advanceEnabled"), "Sync has no user-facing Advance button state.");
+  assert(appSource.includes("Looking for QR"), "Scanner shows a looking-for-QR state.");
+  assert(appSource.includes("QR found"), "Scanner and handshake UI show a QR-found state.");
+  assert(transportSource.includes('COMPACT_OFFER_PREFIX = "QWO:"'), "Host QR uses the compact offer prefix.");
+  assert(transportSource.includes('COMPACT_ANSWER_PREFIX = "QWA:"'), "Answer QR uses the compact answer prefix.");
 }
 
 function rowsState() {
@@ -341,6 +346,7 @@ async function runSyncTransportChecks(browser) {
   const hostPage = await browser.newPage();
   const joinPage = await browser.newPage();
   const otherPage = await browser.newPage();
+  const compactQrPattern = /^[0-9A-Z $%*+\-.\/:]+$/;
 
   await hostPage.goto(baseUrl);
   await joinPage.goto(baseUrl);
@@ -361,6 +367,8 @@ async function runSyncTransportChecks(browser) {
 
   async function connectJoiner(page, player) {
     const offer = await hostPage.evaluate(() => window.__host.createOffer());
+    assert(offer.startsWith("QWO:"), "Host offer uses compact QR prefix.");
+    assert(compactQrPattern.test(offer), "Host offer uses QR alphanumeric characters.");
     const answer = await page.evaluate(async ({ offerText, nextPlayer }) => {
       const { SyncJoinTransport } = await import("/src/syncTransport.ts");
       window.__joinMessages = [];
@@ -370,6 +378,8 @@ async function runSyncTransportChecks(browser) {
       const result = await window.__join.createAnswer(offerText, nextPlayer);
       return result.answerText;
     }, { offerText: offer, nextPlayer: player });
+    assert(answer.startsWith("QWA:"), "Join answer uses compact QR prefix.");
+    assert(compactQrPattern.test(answer), "Join answer uses QR alphanumeric characters.");
 
     await hostPage.evaluate((answerText) => window.__host.acceptAnswer(answerText), answer);
     await hostPage.waitForFunction(
