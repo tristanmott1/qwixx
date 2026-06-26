@@ -556,8 +556,10 @@ Transport state handling:
 
 Heartbeat behavior:
 
-- Host and joiners should exchange lightweight heartbeat messages while sync play is active.
+- Host and joiners should exchange lightweight heartbeat messages while sync play, sync game over, or the secret score page is active.
 - Heartbeats are only a transport-health signal.
+- Any valid data-channel message from a peer is also proof that peer is connected and should clear stale reconnecting UI.
+- Host heartbeat messages should include the current authoritative connection-status map so a missed one-off status message cannot leave stale reconnecting UI.
 - Missed heartbeats may mark a connection as reconnecting.
 - Missed heartbeats must not directly remove players, advance turns, clear Ready payloads, or change score state.
 - Heartbeat state must be ignored for stale or closed transports.
@@ -580,8 +582,8 @@ Joiner disconnect behavior:
 
 Wake lock behavior:
 
-- During active sync play or sync game over, the app should request a screen wake lock when available.
-- The app should release the wake lock when leaving sync play/game over or ending the session.
+- During active sync play, sync game over, or the secret score page, the app should request a screen wake lock when available.
+- The app should release the wake lock when leaving active sync play/game over/secret score views or ending the session.
 - If the page becomes visible again after being hidden, the app should try to reacquire the wake lock.
 - Wake lock is best effort. Failure, denial, or lack of browser support must not affect game logic.
 - Wake lock is not a substitute for reconnect handling because mobile browsers may still suspend background tabs or apps.
@@ -903,8 +905,9 @@ Command input rules:
 - Pressing any other app button or score-card control resets the sequence.
 - Tapping non-interactive dice or empty dice-grid space does not reset the sequence.
 - Pressing a white die that is not a prefix of any available command resets the sequence.
-- The last white-die press after a wrong or partial sequence should immediately start a fresh sequence when it is a valid first step for any available command.
-- Navigating away from sync play/game over resets the sequence.
+- After a wrong or partial sequence, the command buffer should recover to the longest suffix that is still a valid prefix of an available command.
+- This suffix recovery prevents stale hidden input from blocking a correct command entered immediately afterward.
+- Navigating away from sync play/game over or changing synced turn/phase resets the sequence.
 - Opening the secret page resets the sequence.
 
 Secret score-page disable behavior:
@@ -1406,8 +1409,10 @@ Hidden command handling:
 - Opening the secret page increments usage only after the page actually opens.
 - If the score page is globally disabled, the score-page command is not available, but disable and usage-count commands remain available.
 - A wrong white-die press resets the buffer, then immediately starts a new buffer when that last press is a valid prefix.
+- Command matching should keep the longest valid suffix after every white-die press so stale prefixes do not block a newly entered command.
 - Any normal play-page button or score-card action resets the progress.
 - Tapping colored dice, empty dice-grid space, or receiving a remote roll does not reset progress.
+- Synced turn or phase changes reset the progress.
 - Opening the secret page resets the progress.
 - Exiting the secret page returns to the normal sync Play page and resets the progress.
 
@@ -1992,16 +1997,18 @@ Required turn-flow gates:
 
 Required heartbeat behavior:
 
-- Add lightweight heartbeat messages while sync play or sync game over is active.
+- Add lightweight heartbeat messages while sync play, sync game over, or the secret score page is active.
 - Host and joiners should send heartbeat messages on a simple interval.
+- Any valid app message should clear stale reconnecting status for that sender.
+- Host heartbeat messages should carry the current authoritative connection-status map.
 - Heartbeat misses may mark a connection reconnecting.
 - Heartbeats must never directly advance turns, remove players, clear Ready state, or change score state.
 - Ignore heartbeat messages from stale transports or unknown players.
 
 Required wake-lock behavior:
 
-- Request a screen wake lock during sync play and sync game over when available.
-- Release the wake lock outside sync play/game over and when the sync session ends.
+- Request a screen wake lock during sync play, sync game over, and the secret score page when available.
+- Release the wake lock outside active sync play/game over/secret score views and when the sync session ends.
 - Re-request the wake lock after the page becomes visible again.
 - Treat wake-lock support, denial, and release as best-effort; no game logic may depend on wake lock success.
 

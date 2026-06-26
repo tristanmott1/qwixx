@@ -441,6 +441,18 @@ function secretSequenceIsPrefix(presses: SecretDiePress[], sequence: SecretDiePr
   return presses.length <= sequence.length && presses.every((press, index) => press === sequence[index]);
 }
 
+function secretPrefixSuffix(presses: SecretDiePress[], commands: SecretCommand[]) {
+  for (let length = presses.length; length > 0; length -= 1) {
+    const suffix = presses.slice(-length);
+
+    if (commands.some((command) => secretSequenceIsPrefix(suffix, command.sequence))) {
+      return suffix;
+    }
+  }
+
+  return [];
+}
+
 function normalizeSecretScoreUseCounts(value: unknown): SecretScoreUseCounts {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
@@ -1492,7 +1504,8 @@ function App() {
   const isUserTurn = Boolean(currentPlayer && currentPlayer.id === selectedPlayerId);
   const isSyncMode = mode === "sync";
   const isHost = isSyncMode && syncRole === "host";
-  const isSyncPlayActive = isSyncMode && page === "play" && (syncPhase === "turn" || syncPhase === "gameOver");
+  const isSyncConnectionActive =
+    isSyncMode && (page === "play" || page === "secretScores") && (syncPhase === "turn" || syncPhase === "gameOver");
   const hostReconnecting = isSyncMode && !isHost && syncHostConnectionStatus === "reconnecting";
   const visibleConnectionStatuses = useMemo(() => {
     const statuses = { ...syncConnectionStatuses };
@@ -1798,6 +1811,10 @@ function App() {
 
     if (status === "connected") {
       syncHostHeartbeatAtRef.current = Date.now();
+
+      if (latest.syncHostConnectionStatus === "reconnecting") {
+        setSyncMessage("");
+      }
     }
 
     if (latest.syncHostConnectionStatus === status) {
@@ -1805,6 +1822,29 @@ function App() {
     }
 
     applyPlayState({ syncHostConnectionStatus: status });
+  }
+
+  function applyHostConnectionStatuses(value: unknown) {
+    const latest = latestRef.current;
+
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      applyPlayState({ syncConnectionStatuses: {} });
+      return;
+    }
+
+    const nextStatuses: SyncConnectionStatuses = {};
+
+    Object.entries(value).forEach(([playerId, status]) => {
+      if (
+        status === "reconnecting" &&
+        playerId !== latest.selectedPlayerId &&
+        latest.gamePlayers.some((player) => player.id === playerId)
+      ) {
+        nextStatuses[playerId] = "reconnecting";
+      }
+    });
+
+    applyPlayState({ syncConnectionStatuses: nextStatuses });
   }
 
   function getAvailableSecretCommands() {
@@ -1875,7 +1915,7 @@ function App() {
     }
 
     const commands = getAvailableSecretCommands();
-    const nextPresses = [...secretPresses, press];
+    const nextPresses = secretPrefixSuffix([...secretPresses, press], commands);
     const exactCommand = commands.find((command) => secretSequenceMatches(nextPresses, command.sequence));
 
     if (exactCommand) {
@@ -1884,12 +1924,7 @@ function App() {
       return;
     }
 
-    if (commands.some((command) => secretSequenceIsPrefix(nextPresses, command.sequence))) {
-      setSecretPresses(nextPresses);
-      return;
-    }
-
-    setSecretPresses(commands.some((command) => secretSequenceIsPrefix([press], command.sequence)) ? [press] : []);
+    setSecretPresses(nextPresses);
   }
 
   function resetSecretOnPlayClick(event: ReactMouseEvent<HTMLDivElement>) {
@@ -1992,6 +2027,10 @@ function App() {
   }, [page, secretScoresDisabled, secretScoreTurnId, syncTurnId]);
 
   useEffect(() => {
+    resetSecretPresses();
+  }, [syncPhase, syncTurnId]);
+
+  useEffect(() => {
     if (!secretUseCountsOpen || (mode === "sync" && page === "play")) {
       return;
     }
@@ -2089,7 +2128,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!isSyncPlayActive) {
+    if (!isSyncConnectionActive) {
       return undefined;
     }
 
@@ -2098,7 +2137,11 @@ function App() {
       const now = Date.now();
 
       if (latest.syncRole === "host") {
-        hostTransportRef.current?.broadcast({ type: "heartbeat", at: now });
+        hostTransportRef.current?.broadcast({
+          type: "heartbeat",
+          at: now,
+          connectionStatuses: latest.syncConnectionStatuses,
+        });
 
         latest.gamePlayers.forEach((player) => {
           if (player.id === latest.selectedPlayerId) {
@@ -2135,10 +2178,10 @@ function App() {
     return () => {
       window.clearInterval(heartbeatInterval);
     };
-  }, [isSyncPlayActive]);
+  }, [isSyncConnectionActive]);
 
   useEffect(() => {
-    if (!isSyncPlayActive) {
+    if (!isSyncConnectionActive) {
       return undefined;
     }
 
@@ -2183,7 +2226,7 @@ function App() {
       syncWakeLockRef.current = null;
       void currentWakeLock?.release().catch(() => undefined);
     };
-  }, [isSyncPlayActive]);
+  }, [isSyncConnectionActive]);
 
   useEffect(() => {
     if (!draggingPlayerId) {
@@ -2575,8 +2618,9 @@ function App() {
   }
 
   function handleHostMessage(playerId: string, message: SyncWireMessage) {
+    setPeerConnectionStatus(playerId, "connected");
+
     if (message.type === "heartbeat") {
-      setPeerConnectionStatus(playerId, "connected");
       return;
     }
 
@@ -2612,8 +2656,10 @@ function App() {
   }
 
   function handleJoinerMessage(_playerId: string, message: SyncWireMessage) {
+    setHostConnectionStatus("connected");
+
     if (message.type === "heartbeat") {
-      setHostConnectionStatus("connected");
+      applyHostConnectionStatuses(message.connectionStatuses);
       return;
     }
 

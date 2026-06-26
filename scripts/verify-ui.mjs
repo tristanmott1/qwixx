@@ -137,8 +137,13 @@ async function runSourceChecks() {
   assert(transportSource.includes('state === "failed" || state === "closed"') && transportSource.includes("markPeerGone"), "Only terminal WebRTC states mark a peer gone.");
   assert(appSource.includes("HEARTBEAT_INTERVAL_MS = 5000"), "Sync heartbeat interval is five seconds.");
   assert(appSource.includes("HEARTBEAT_STALE_MS = 15000"), "Sync heartbeat stale threshold is fifteen seconds.");
-  assert(appSource.includes('type: "heartbeat"'), "Sync play sends heartbeat messages.");
+  assert(appSource.includes("isSyncConnectionActive"), "Sync connection health is scoped separately from the visible play page.");
+  assert(appSource.includes('page === "play" || page === "secretScores"'), "Secret score page keeps sync connection health active.");
+  assert(appSource.includes('type: "heartbeat"'), "Sync active pages send heartbeat messages.");
+  assert(appSource.includes("connectionStatuses: latest.syncConnectionStatuses"), "Host heartbeat carries the authoritative connection-status map.");
   assert(appSource.includes('type: "connectionStatus"'), "Host broadcasts reconnecting/connected status changes.");
+  assert(appSource.includes('setPeerConnectionStatus(playerId, "connected");'), "Any joiner message clears stale host-side reconnecting status.");
+  assert(appSource.includes('setHostConnectionStatus("connected");'), "Any host message clears stale joiner-side reconnecting status.");
   assert(appSource.includes("syncConnectionStatuses"), "Sync app tracks peer connection statuses.");
   assert(appSource.includes("syncHostConnectionStatus"), "Joiners track host connection status.");
   assert(appSource.includes("reconnectingUnreadyPlayers"), "Automatic sync advance is explicitly gated by unready reconnecting players.");
@@ -180,6 +185,8 @@ async function runSourceChecks() {
   assert(appSource.includes('{ id: "disableScores", sequence: ["top", "top", "top", "bottom", "bottom", "bottom", "top", "bottom"] }'), "Secret disable command matches the agreed sequence.");
   assert(appSource.includes('{ id: "showUseCounts", sequence: ["bottom", "bottom", "top", "bottom", "bottom", "top"] }'), "Secret usage command matches the agreed sequence.");
   assert(appSource.includes("secretPresses"), "Secret command matching uses one shared press buffer.");
+  assert(appSource.includes("function secretPrefixSuffix"), "Secret command matching recovers from stale prefix input.");
+  assert(appSource.includes("}, [syncPhase, syncTurnId]);"), "Secret command progress resets across synced phase and turn changes.");
   assert(!appSource.includes("secretProgress"), "Secret command matching does not keep separate progress state.");
   assert(appSource.includes('type Page = "home" | "picker" | "play" | "secretScores"'), "Secret scores use a real app page.");
   assert(appSource.includes("syncPlayerScores"), "Sync mode stores finalized per-player score snapshots.");
@@ -513,8 +520,9 @@ async function runSyncHostChecks(page) {
   await secretBottomDie.click();
   await secretBottomDie.click();
   assert((await page.locator(".secret-score-page").count()) === 0, "Wrong secret sequence does not open the score page.");
+  await secretTopDie.click();
   await enterSecretSequence(page, openSecretScoresSequence);
-  assert((await page.locator(".secret-score-page").count()) === 1, "Correct secret sequence opens the score page.");
+  assert((await page.locator(".secret-score-page").count()) === 1, "Correct secret sequence opens despite stale prefix input.");
   assert((await page.locator(".secret-score-entry", { hasText: "Alice" }).count()) === 1, "Secret score page shows the local player.");
   assert((await page.locator(".secret-score-entry .grand-total").last().textContent()) === "0", "Missing score snapshots render as zero.");
   await page.screenshot({ path: outputPath("sync-secret-scores-mobile.png"), fullPage: true });
@@ -549,8 +557,9 @@ async function runSyncHostChecks(page) {
     await page.getByRole("button", { name: "Ready" }).click();
   }
   assert(await page.getByRole("button", { name: "Ready" }).isDisabled(), "Sync game over disables Ready.");
+  await page.locator('[data-secret-die="top"]').click();
   await enterSecretSequence(page, openSecretScoresSequence);
-  assert((await page.locator(".secret-score-page").count()) === 1, "Secret score page opens during sync game over.");
+  assert((await page.locator(".secret-score-page").count()) === 1, "Secret score page opens during sync game over despite stale prefix input.");
   assert((await page.locator(".secret-score-entry .penalty-box.selected").count()) === 4, "Secret score page shows game-over penalties.");
   await page.getByRole("button", { name: "Back" }).click();
   await enterSecretSequence(page, disableSecretScoresSequence);
